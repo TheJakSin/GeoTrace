@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geotrace-desktop"
+version = "0.2.0a1"
+description = "Experimental geological map digitization desktop"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "PySide6-Essentials>=6.8,<7", "rasterio>=1.4,<2", "fiona>=1.10,<2",
+  "shapely>=2.0,<3", "numpy>=1.26,<3", "scipy>=1.14,<2",
+  "opencv-python-headless>=4.10,<5", "pillow>=11,<13"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "build>=1"]
+research = ["torch>=2.6,<3", "torchvision>=0.21,<1", "timm>=1,<2", "psutil>=6,<8"]
+
+[project.scripts]
+geotrace = "geotrace.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+geotrace = ["qml/*.qml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,6 @@
+include *.md
+include *.command
+include *.bat
+recursive-include tools *.py
+recursive-include tests *.py
+recursive-include src/geotrace/qml *.qml
