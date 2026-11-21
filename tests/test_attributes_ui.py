@@ -28,8 +28,18 @@ def test_field_dialog_typed_editor_validation_and_undo(tmp_path):
     def button(name):
         item=window.findChild(QQuickItem,name)
         assert item is not None and item.isEnabled() and item.isVisible(),name
-        QTest.mouseClick(window,Qt.LeftButton,Qt.NoModifier,item.mapToScene(QPointF(item.width()/2,item.height()/2)).toPoint())
-        QTest.qWait(50)
+        # Allow hover/layout to settle before sending a real press and release.
+        # An instantaneous mouseClick can miss a moving Quick control on CI.
+        QTest.mouseMove(window,item.mapToScene(QPointF(item.width()/2,item.height()/2)).toPoint())
+        QTest.qWait(60)
+        point=item.mapToScene(QPointF(item.width()/2,item.height()/2)).toPoint()
+        QTest.mousePress(window,Qt.LeftButton,Qt.NoModifier,point)
+        if not item.property('pressed'):
+            Path('test-screenshots').mkdir(exist_ok=True)
+            window.grabWindow().save('test-screenshots/attributes-'+name+'.png')
+        assert item.property('pressed'), (name,point)
+        QTest.mouseRelease(window,Qt.LeftButton,Qt.NoModifier,point)
+        QTest.qWait(70)
     def visual(name, item=None):
         item = item or window.contentItem()
         if item.objectName() == name: return item
