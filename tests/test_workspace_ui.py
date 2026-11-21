@@ -119,7 +119,16 @@ def test_workspace_groups_shift_panels_review_and_palette_visibility(tmp_path):
         assert help_dialog.property('opened') and help_dialog.property('visible')
         assert '0.8 beta 1' in help_dialog.property('title')
         QTest.keyClick(window,Qt.Key_P);assert b.edit_tool==0, 'Modal help must block map actions.'
-        QTest.keyClick(window,Qt.Key_Escape);QTest.qWait(250);assert not help_dialog.property('visible')
+        QTest.keyClick(window,Qt.Key_Escape)
+        # visible stays true throughout the exit animation. Wait for closure,
+        # rather than treating a runner's rendering speed as product behavior.
+        for _ in range(150):
+            if not help_dialog.property('visible'): break
+            QTest.qWait(20)
+        if help_dialog.property('visible'):
+            Path('test-screenshots').mkdir(exist_ok=True)
+            window.grabWindow().save('test-screenshots/help-escape.png')
+        assert not help_dialog.property('visible'), (help_dialog.property('opened'), help_dialog.property('activeFocus'), window.activeFocusItem(), QGuiApplication.focusWindow())
         click('helpButton');assert help_dialog.property('visible')
         QMetaObject.invokeMethod(help_dialog,'close',Qt.DirectConnection);QTest.qWait(250)
         unchanged(snapshot)
