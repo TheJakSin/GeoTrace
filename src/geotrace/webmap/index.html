@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GeoTrace Web Map · loading</title>
+<style>
+html,body,#map{width:100%;height:100%;margin:0;font:14px Arial,sans-serif;background:#edf1f2}
+#status{position:absolute;z-index:10;left:50%;top:35%;transform:translateX(-50%);max-width:470px;padding:24px;background:white;border:1px solid #cbd9d8;border-radius:12px;color:#193d42;line-height:1.6;box-sizing:border-box}
+#status strong{display:block;margin-bottom:8px;font-size:18px}
+</style></head><body><div id="map"></div><div id="status"><strong id="headline">Загружаю Яндекс Карты…</strong><span id="detail">Подключение к картографическому сервису.</span></div>
+<script>
+"use strict";
+let map, outlines, project, rasterLayer, polygonLayer, rasterPane;
+let visibleOutlines=true, visibleRaster=true, visiblePolygons=true, rasterOpacity=.8, polygonOpacity=.25;
+let rasterRevision=-1, vectorRevision=-1, fittedRasterRevision=-1, requestGeneration=0;
+function rasterVisibility(){
+    if(rasterLayer){
+        const attached=!!rasterLayer.getMap();
+        if(visibleRaster && !attached)map.layers.add(rasterLayer);
+        else if(!visibleRaster && attached)map.layers.remove(rasterLayer);
+    }
+    if(rasterPane)rasterPane.getElement().style.opacity=String(rasterOpacity);
+}
+function polygonVisibility(){
+    if(polygonLayer){
+        polygonLayer.setFilter(()=>visiblePolygons);
+        polygonLayer.objects.options.set('fillOpacity',polygonOpacity);
+    }
+}
+function setMapStatus(code, headline, detail) {
+    document.title='GeoTrace Web Map · '+code;
+    document.getElementById('headline').textContent=headline;
+    document.getElementById('detail').textContent=detail;
+    document.getElementById('status').style.display=code==='ready'?'none':'block';
+}
+function fail() { setMapStatus('error','Не удалось открыть карту','Проверьте интернет и доступ стандартного ключа к JavaScript API Яндекс Карт. В настройках вкладки можно указать другой ключ.'); }
+window.addEventListener('unhandledrejection',fail);
+window.GeoTraceMap={
+    setType(type){if(map && ['map','satellite','hybrid'].includes(type)) map.setType('yandex#'+type);},
+    showOutlines(value){visibleOutlines=!!value;if(outlines)outlines.options.set('visible',visibleOutlines);},
+    showRaster(value){visibleRaster=!!value;rasterVisibility();},
+    showPolygons(value){visiblePolygons=!!value;polygonVisibility();},
+    setRasterOpacity(value){rasterOpacity=Math.max(0,Math.min(1,Number(value)));rasterVisibility();},
+    setPolygonOpacity(value){polygonOpacity=Math.max(0,Math.min(1,Number(value)));polygonVisibility();},
+    fitProject(){if(map && project && project.bounds) map.setBounds(project.bounds,{checkZoomRange:true,zoomMargin:60});},
+    async updateProject(fit=false){
+        const generation=++requestGeneration;
+        const next=await (await fetch('project.json',{cache:'no-store'})).json();
+        if(!map || generation!==requestGeneration)return;
+        project=next;
+        if(rasterRevision!==project.rasterRevision){
+            if(rasterLayer && rasterLayer.getMap())map.layers.remove(rasterLayer);
+            rasterLayer=null;rasterRevision=project.rasterRevision;
+            if(project.rasterAvailable){
+                const revision=rasterRevision;
+                rasterLayer=new ymaps.Layer((tile,z)=>'raster/'+revision+'/'+z+'/'+tile[0]+'/'+tile[1]+'.png',{
+                    projection:ymaps.projection.wgs84Mercator,tileTransparent:true,pane:'geotraceRaster'});
+            }
+            rasterVisibility();
+        }
+        if(vectorRevision!==project.vectorRevision){
+            const vectors=await (await fetch('polygons.json',{cache:'no-store'})).json();
+            if(generation!==requestGeneration)return;
+            if(vectors.revision!==project.vectorRevision)return this.updateProject(fit);
+            if(polygonLayer)map.geoObjects.remove(polygonLayer);
+            polygonLayer=new ymaps.ObjectManager({clusterize:false,geoObjectOpenBalloonOnClick:false});
+            polygonLayer.add(vectors);map.geoObjects.add(polygonLayer);
+            vectorRevision=project.vectorRevision;polygonVisibility();
+        }
+        if(outlines)map.geoObjects.remove(outlines);
+        outlines=new ymaps.GeoObjectCollection({}, {visible:visibleOutlines});
+        if(project.outline.length)outlines.add(new ymaps.Polygon([project.outline],{}, {fillOpacity:0,strokeColor:'#087e78',strokeWidth:3}));
+        for(const polygon of project.areas)outlines.add(new ymaps.Polygon(polygon,{}, {fillColor:'#087e7820',strokeColor:'#d32a78',strokeWidth:3}));
+        map.geoObjects.add(outlines);
+        if(fit || fittedRasterRevision!==project.rasterRevision){
+            this.fitProject();fittedRasterRevision=project.rasterRevision;
+        }
+    }
+};
+(async()=>{
+    const config=await (await fetch('config.json',{cache:'no-store'})).json();
+    if(!config.apiKey){fail();return;}
+    const deadline=setTimeout(fail,25000);
+    await new Promise((resolve,reject)=>{
+        const script=document.createElement('script');
+        script.src='https://api-maps.yandex.ru/2.1/?'+new URLSearchParams({apikey:config.apiKey,lang:'ru_RU'});
+        script.onload=resolve;script.onerror=reject;document.head.appendChild(script);
+    });
+    if(!window.ymaps){fail();return;}
+    await new Promise((resolve,reject)=>ymaps.ready(resolve,reject));
+    map=new ymaps.Map('map',{center:[55.751244,37.618423],zoom:8,controls:['zoomControl']});
+    rasterPane=new ymaps.pane.MovablePane(map,{zIndex:180});
+    map.panes.append('geotraceRaster',rasterPane);
+    await GeoTraceMap.updateProject(true);
+    clearTimeout(deadline);setMapStatus('ready','','');
+})().catch(fail);
+</script></body></html>

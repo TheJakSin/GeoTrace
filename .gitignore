@@ -15,3 +15,7 @@ dist/
 *.pt
 *.pth
 *.npz
+*.geotrace
+
+# Runtime branding belongs in source packages.
+!src/geotrace/qml/*.png

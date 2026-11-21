@@ -8,6 +8,7 @@ import numpy as np
 from scipy import ndimage
 
 from .core import Raster
+from .preprocessing import clean_colors
 
 
 @dataclass
@@ -46,21 +47,6 @@ def validate_points(raster, roi, points):
         seen[x, y] = label
     return np.array([(int(x)-x0, int(y)-y0, int(v)) for x, y, v in points], dtype=np.int32)
 
-
-def clean_colors(rgb, valid):
-    """Local bright-paper reconstruction; may erase narrow genuine dark units."""
-    if not valid.any():
-        raise ValueError('В области нет данных.')
-    # Fill transparency before filtering so black frame cannot create a false boundary.
-    indices = ndimage.distance_transform_edt(~valid, return_distances=False, return_indices=True)
-    filled = rgb[tuple(indices)]
-    lab = cv2.cvtColor(filled, cv2.COLOR_RGB2LAB)
-    light = lab[:, :, 0]
-    local_light = ndimage.percentile_filter(light, 70, size=9)
-    ink = (light.astype(np.int16) < local_light.astype(np.int16) - 24) & valid
-    if ink.any() and (~ink & valid).any():
-        filled = cv2.inpaint(filled, ink.astype(np.uint8)*255, 3, cv2.INPAINT_TELEA)
-    return cv2.medianBlur(filled, 5)
 
 
 def color_mask(rgb, valid, points, tolerance=22):

@@ -3,4 +3,5 @@ include *.command
 include *.bat
 recursive-include tools *.py
 recursive-include tests *.py
-recursive-include src/geotrace/qml *.qml
+recursive-include src/geotrace/qml *.qml *.png *.svg
+recursive-include src/geotrace/webmap *.html

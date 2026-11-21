@@ -3,6 +3,9 @@ cd /d "%~dp0"
 if not exist .venv\Scripts\python.exe (
     py -3.11 -m venv .venv
     if errorlevel 1 goto fail
+)
+.venv\Scripts\python.exe -c "import geotrace.app; import PySide6.QtWebEngineQuick" >nul 2>&1
+if errorlevel 1 (
     .venv\Scripts\python.exe -m pip install -e .
     if errorlevel 1 goto fail
 )
