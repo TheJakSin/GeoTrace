@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -26,7 +27,8 @@ def test_quality_benchmark_cli_writes_scored_json_or_rejects_wrong_grid(tmp_path
     output = tmp_path / 'report.json'
     process = subprocess.run([sys.executable, str(root / 'tools/benchmark_quality.py'),
                               '--raster', str(source), '--reference', str(tmp_path / 'reference.npy'),
-                              '--output', str(output)], capture_output=True, text=True)
+                              '--output', str(output)], capture_output=True, text=True,
+                             env={**os.environ, 'PYTHONIOENCODING': 'cp1252:strict'})
     if aligned:
         assert process.returncode == 0, process.stderr
         report = json.loads(output.read_text(encoding='utf-8'))

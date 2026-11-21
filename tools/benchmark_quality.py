@@ -58,7 +58,9 @@ def main():
     report['seconds'] = time.perf_counter() - started
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    print(json.dumps({k: v for k, v in report.items() if k != 'cases'}, ensure_ascii=False))
+    # Redirected Windows consoles may still use a legacy single-byte encoding.
+    # Keep stdout portable ASCII JSON; the saved report remains readable UTF-8.
+    print(json.dumps({k: v for k, v in report.items() if k != 'cases'}, ensure_ascii=True))
     if not all(report[k] for k in ('valid_geometry', 'complete_coverage', 'no_overlaps')):
         raise SystemExit('Geometry validation failed; see report')
 
