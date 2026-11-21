@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 import math
+import time
 
 import cv2
 import numpy as np
@@ -34,8 +35,20 @@ def checkpoint(folder, stage, progress):
         if (folder/'quality-cancel').exists():
             raise Cancelled('Расчёт остановлен. Прежние полигоны сохранены.')
         temp = folder/'quality-progress.tmp'
-        temp.write_text(json.dumps(dict(stage=stage, progress=progress)), encoding='utf-8')
-        temp.replace(folder/'quality-progress.json')
+        for attempt in range(5):
+            if (folder/'quality-cancel').exists():
+                raise Cancelled('Расчёт остановлен. Прежние полигоны сохранены.')
+            try:
+                temp.write_text(json.dumps(dict(stage=stage, progress=progress)), encoding='utf-8')
+                temp.replace(folder/'quality-progress.json')
+                break
+            except PermissionError:
+                # Windows can briefly deny replacement while the UI reads the
+                # previous frame. Progress is advisory; keep computing after
+                # bounded retries rather than discarding a valid calculation.
+                if attempt < 4:
+                    time.sleep(.01)
+
 
 
 @dataclass

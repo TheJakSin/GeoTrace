@@ -1475,7 +1475,7 @@ ApplicationWindow {
             Rectangle {
                 id: attributesPanel; objectName: "attributesPanel"; visible: root.attributesShown
                 parent: viewport; anchors.right: parent.right; anchors.top: parent.top; z: 120
-                width: 292; height: Math.min(viewport.height,attributeControls.implicitHeight+24); color: "#ffffff"; border.color: "#dce0e6"
+                width: 292; height: Math.min(viewport.height,attributeControls.implicitHeight+attributesHeader.height+36); color: "#ffffff"; border.color: "#dce0e6"
                 MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: function(wheel){wheel.accepted=true} }
                 property var scopeData: ({count:0,values:{},mixed:[],epoch:0})
                 property int draftToken: 0
@@ -1507,14 +1507,18 @@ ApplicationWindow {
                 onDataEpochChanged: refreshScope()
                 onSelectionKeyChanged: if(attributeTarget.currentIndex===0)refreshScope()
                 Component.onCompleted: refreshScope()
+                RowLayout {
+                    id: attributesHeader; objectName: "attributesHeader"
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                    anchors.margins: 12; height: 34
+                    Label { text: "Атрибуты"; font.bold: true; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
+                    ActionButton { text: "Поля…"; objectName: "manageFieldsButton"; Layout.preferredWidth: 70; enabled: !!root.appState.rasterUrl && !root.appState.busy; onClicked: schemaManager.open() }
+                    ActionButton { text: "×"; description: "Закрыть атрибуты"; objectName: "closeAttributes"; Layout.preferredWidth: 30; onClicked: root.attributesPinned=false }
+                }
                 ColumnLayout {
                     id: attributeControls
-                    anchors.fill: parent; anchors.margins: 12; spacing: 8
-                    RowLayout { Layout.fillWidth: true
-                        Label { text: "Атрибуты"; font.bold: true; Layout.fillWidth: true }
-                        ActionButton { text: "Поля…"; objectName: "manageFieldsButton"; enabled: !!root.appState.rasterUrl && !root.appState.busy; onClicked: schemaManager.open() }
-                        ActionButton { text: "×"; description: "Закрыть атрибуты"; objectName: "closeAttributes"; onClicked: root.attributesPinned=false }
-                    }
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                    anchors.top: attributesHeader.bottom; anchors.leftMargin: 12; anchors.rightMargin: 12; anchors.bottomMargin: 12; anchors.topMargin: 6; spacing: 8
                     ComboBox { implicitHeight: 34; id: attributeTarget; objectName: "attributeTarget"; Layout.fillWidth: true; model: ["Выделенные объекты","Группа","По фильтру"] }
                     ComboBox { implicitHeight: 34; id: attributeGroup; objectName: "attributeGroup"; Layout.fillWidth: true
                         visible: attributeTarget.currentIndex>0; model: [attributeTarget.currentIndex===2 ? "Все группы" : "Выберите группу"].concat(root.groupNames) }

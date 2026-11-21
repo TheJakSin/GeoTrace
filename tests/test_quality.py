@@ -304,3 +304,50 @@ def test_additional_palette_search_checks_cancellation(tmp_path, monkeypatch):
         prepare(r, folder=tmp_path)
     assert count == 2
     np.testing.assert_array_equal(r.rgb, before)
+
+
+def test_progress_retries_temporary_windows_file_lock(tmp_path, monkeypatch):
+    from pathlib import Path
+    from geotrace import quality
+    replace_file = Path.replace
+    calls = []
+    def temporarily_locked(path, target):
+        calls.append(True)
+        if len(calls) < 3:
+            raise PermissionError('Progress frame is being read')
+        return replace_file(path, target)
+    monkeypatch.setattr(Path, 'replace', temporarily_locked)
+    monkeypatch.setattr(quality.time, 'sleep', lambda _: None)
+    quality.checkpoint(tmp_path, 'Контроль', 60)
+    assert len(calls) == 3
+    assert quality.json.loads((tmp_path/'quality-progress.json').read_text())['progress'] == 60
+
+
+def test_busy_progress_file_cannot_abort_the_calculation(tmp_path, monkeypatch):
+    from pathlib import Path
+    from geotrace import quality
+    quality.checkpoint(tmp_path, 'Прежний кадр', 20)
+    calls = []
+    def locked(path, target):
+        calls.append(True)
+        raise PermissionError('Antivirus or UI holds the old progress frame')
+    monkeypatch.setattr(Path, 'replace', locked)
+    monkeypatch.setattr(quality.time, 'sleep', lambda _: None)
+    quality.checkpoint(tmp_path, 'Новый кадр', 50)
+    assert len(calls) == 5
+    assert quality.json.loads((tmp_path/'quality-progress.json').read_text())['progress'] == 20
+    (tmp_path/'quality-cancel').touch()
+    with pytest.raises(Cancelled):
+        quality.checkpoint(tmp_path, 'После отмены', 60)
+
+
+def test_cancellation_is_checked_between_progress_write_retries(tmp_path, monkeypatch):
+    from pathlib import Path
+    from geotrace import quality
+    def cancel_while_locked(path, target):
+        (tmp_path/'quality-cancel').touch()
+        raise PermissionError('Progress frame is being read')
+    monkeypatch.setattr(Path, 'replace', cancel_while_locked)
+    monkeypatch.setattr(quality.time, 'sleep', lambda _: None)
+    with pytest.raises(Cancelled):
+        quality.checkpoint(tmp_path, 'Остановить', 50)

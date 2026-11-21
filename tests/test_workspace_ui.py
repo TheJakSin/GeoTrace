@@ -91,7 +91,10 @@ def test_workspace_groups_shift_panels_review_and_palette_visibility(tmp_path):
         b.clearEditSelection();unchanged(snapshot)
         view.setProperty('zoom',view.property('zoom')*1.5);view.setProperty('contentX',80);view.setProperty('contentY',40);QTest.qWait(30)
         snapshot=camera();b.selectForEdit(5,5);b.selectForEdit(20,5);unchanged(snapshot)
-        click('attributesToggle');unchanged(snapshot);click('closeAttributes');unchanged(snapshot)
+        click('attributesToggle');unchanged(snapshot)
+        panel=item('attributesPanel');close=item('closeAttributes');position=close.mapToItem(panel,QPointF(0,0))
+        assert 0<=position.x() and position.x()+close.width()<=panel.width()
+        click('closeAttributes');unchanged(snapshot)
         click('viewToolButton');assert window.property('viewing');unchanged(snapshot)
         QTest.keyClick(window,Qt.Key_V);QTest.qWait(30);assert not window.property('viewing') and b.edit_tool==0
         QTest.keyClick(window,Qt.Key_L);assert item('lassoToggle').property('checked')

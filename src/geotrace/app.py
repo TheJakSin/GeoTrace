@@ -696,7 +696,9 @@ class Backend(QObject):
             if len(self.quality_groups)>=64:
                 raise ValueError('Достигнут предел в 64 цветовые группы.')
             if self.sample_lab is None:
-                self.sample_lab = np.load(Path(self.temp.name)/'palette-lab.npy',mmap_mode='r')
+                # The working overview is bounded (~31 MB). An owned array
+                # releases the file immediately, including on Windows.
+                self.sample_lab = np.load(Path(self.temp.name)/'palette-lab.npy',allow_pickle=False)
             ident = len(self.quality_groups)+1
             sample = sample_fill(self.sample_lab,self.palette_labels,x,y,ident)
             labels = split_labels(self.sample_lab,self.palette_labels,sample)

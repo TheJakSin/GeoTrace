@@ -75,6 +75,9 @@ def test_preparation_palette_selection_merge_cancel_apply_save_and_undo(tmp_path
         expected=[int(point.x()*r.rgb.shape[1]/layer.width()),int(point.y()*r.rgb.shape[0]/layer.height())]
         QTest.mouseClick(w,Qt.LeftButton,Qt.NoModifier,start)
         assert samples.count()==1 and list(samples.at(0))==expected
+        assert b.sample_lab is not None and not isinstance(b.sample_lab,np.memmap)
+        lab_file=Path(b.temp.name)/'palette-lab.npy';moved=lab_file.with_suffix('.bak')
+        lab_file.replace(moved);moved.replace(lab_file)  # No live file mapping may block reuse on Windows.
         click('paletteFit')
         assert view.property('zoom')==1 and view.property('centerX')==.5
         click('paletteFocus_2');assert b.data['paletteUrl']
