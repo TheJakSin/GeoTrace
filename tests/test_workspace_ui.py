@@ -109,8 +109,15 @@ def test_workspace_groups_shift_panels_review_and_palette_visibility(tmp_path):
         assert window.property('viewing')
         QTest.keyClick(window,Qt.Key_V)
         # F1 and the application button open the same concise modal help.
-        QTest.keyClick(window,Qt.Key_F1);QTest.qWait(50)
-        help_dialog=window.findChild(QObject,'helpDialog');assert help_dialog.property('visible')
+        QTest.keyClick(window,Qt.Key_F1)
+        help_dialog=window.findChild(QObject,'helpDialog')
+        # visible is already true during the enter transition. Send keys only
+        # after the popup has opened and acquired its modal focus.
+        for _ in range(100):
+            if help_dialog.property('opened'): break
+            QTest.qWait(20)
+        assert help_dialog.property('opened') and help_dialog.property('visible')
+        assert '0.8 beta 1' in help_dialog.property('title')
         QTest.keyClick(window,Qt.Key_P);assert b.edit_tool==0, 'Modal help must block map actions.'
         QTest.keyClick(window,Qt.Key_Escape);QTest.qWait(250);assert not help_dialog.property('visible')
         click('helpButton');assert help_dialog.property('visible')
