@@ -786,13 +786,16 @@ ApplicationWindow {
     Dialog {
         id: helpDialog; objectName: "helpDialog"; title: "GeoTrace " + backend.releaseLabel + " · справка"
         anchors.centerIn: parent; width: 620; modal: true; focus: true; standardButtons: Dialog.Close
+        closePolicy: Popup.CloseOnEscape
+        onOpened: helpCloseButton.forceActiveFocus()
+        Shortcut { sequences: ["Escape"]; enabled: helpDialog.visible; onActivated: helpDialog.close() }
         background: Rectangle { color: "#ffffff"; border.color: "#dce0e6"; radius: 4 }
         header: Label { text: helpDialog.title; padding: 18; bottomPadding: 12; font.pixelSize: 18; font.bold: true; color: "#252f3d" }
         footer: Item { implicitHeight: 50
             ActionButton { anchors.left: parent.left; anchors.leftMargin: 18; anchors.verticalCenter: parent.verticalCenter
                 text: "Полное руководство ↗"; description: "Открыть руководство GeoTrace 0.8 beta в браузере"
                 onClicked: Qt.openUrlExternally("https://github.com/TheJakSin/GeoTrace/blob/v0.8.0-beta.1/docs/USER_GUIDE.md") }
-            ActionButton { anchors.right: parent.right; anchors.rightMargin: 18; anchors.verticalCenter: parent.verticalCenter
+            ActionButton { id: helpCloseButton; anchors.right: parent.right; anchors.rightMargin: 18; anchors.verticalCenter: parent.verticalCenter
                 text: "Закрыть"; description: "Закрыть справку"; shortcutLabel: "Esc"; onClicked: helpDialog.close() }
         }
         contentItem: ColumnLayout { spacing: 14
