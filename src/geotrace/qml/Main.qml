@@ -937,9 +937,17 @@ ApplicationWindow {
                 parent: viewport; anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; z: 120
                 width: 230; color: "#ffffff"
                 MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: function(wheel){wheel.accepted=true} }
+                RowLayout {
+                    id: layersHeader; objectName: "layersHeader"
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                    anchors.margins: 12; height: 34
+                    Label { text: "Слои"; font.bold: true; font.pixelSize: 15; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
+                    ActionButton { text: "×"; description: "Закрыть слои"; objectName: "closeLayers"; Layout.preferredWidth: 30; onClicked: root.sidebarOpen=false }
+                }
                 ScrollView {
                     id: sidebarScroll; objectName: "sidebarScroll"
-                    anchors.fill: parent; anchors.margins: 16; clip: true
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                    anchors.top: layersHeader.bottom; anchors.leftMargin: 16; anchors.rightMargin: 16; anchors.bottomMargin: 16; anchors.topMargin: 4; clip: true
                     contentWidth: availableWidth
                     ScrollBar.vertical: ScrollBar {
                         policy: ScrollBar.AlwaysOn; width: 6
@@ -949,10 +957,7 @@ ApplicationWindow {
                     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                     ColumnLayout {
                         width: sidebarScroll.availableWidth - 12; spacing: 10
-                        RowLayout { Layout.fillWidth: true
-                            Label { text: "Слои"; font.bold: true; font.pixelSize: 15; Layout.fillWidth: true }
-                            ActionButton { text: "×"; description: "Закрыть слои"; objectName: "closeLayers"; onClicked: root.sidebarOpen=false }
-                        }
+
 
                         ColumnLayout { visible: true; Layout.fillWidth: true; spacing: 8
                         Rectangle { Layout.fillWidth: true; height: 1; color: "#dce0e6" }

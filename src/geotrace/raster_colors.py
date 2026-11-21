@@ -1,13 +1,12 @@
 """Bounded decoding of display colours from georeferenced TIFFs."""
 from collections import OrderedDict
 from pathlib import Path
-from xml.sax.saxutils import escape
+from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 import numpy as np
-from affine import Affine
+import rasterio
 from rasterio.enums import ColorInterp, Resampling
-from rasterio.io import MemoryFile
-from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window
 
 
@@ -21,13 +20,7 @@ def _byte_values_in_uint16(source):
     not a sample which could miss a small high-valued area. Reuse the check
     within the worker while the local source identity and timestamp match.
     """
-    key = None
-    try:
-        stat = Path(source.name).stat()
-        key = (source.name, stat.st_ino, stat.st_size, stat.st_mtime_ns,
-               source.width, source.height, source.count)
-    except OSError:
-        pass
+    key = _source_identity(source)
     if key in _byte_ranges:
         _byte_ranges.move_to_end(key)
         return _byte_ranges[key]
@@ -48,47 +41,85 @@ def _byte_values_in_uint16(source):
     return compatible
 
 
-def _palette_rgb(source, width, height):
-    # Expand native palette entries before resampling. Direct VRT RasterIO
-    # with out_shape may interpolate the *indices*, inventing unrelated hues.
-    # Private GDAL source handles avoid sharing a dataset with other readers
-    # or worker threads in the application.
-    filename = escape(source.name)
+_palette_files = OrderedDict()
+_palette_folder = None
+_PALETTE_CACHE_BYTES = 256 * 1024**2
+
+
+def _source_identity(source):
+    try:
+        files = [Path(source.name), Path(source.name+'.msk'), Path(source.name+'.aux.xml')]
+        identity = tuple((str(p), p.stat().st_ino, p.stat().st_size, p.stat().st_mtime_ns)
+                         for p in files if p.is_file())
+        if not identity:
+            return None
+        return identity, source.width, source.height, source.count, source.nodata
+    except OSError:
+        return None
+
+
+def _expand_palette(source):
+    global _palette_folder
+    if _palette_folder is None:
+        _palette_folder = TemporaryDirectory(prefix='geotrace-colours-')
+    path = Path(_palette_folder.name)/(uuid4().hex+'.tif')
     colours = source.colormap(1)
-    bands = []
-    for channel, name in enumerate(('Red', 'Green', 'Blue'), 1):
-        # Copy palette values into the VRT lookup table. This avoids retaining
-        # a native colour-table pointer across the nested warp reader.
-        lookup = ','.join(f'{index}:{value[channel-1]}' for index, value in sorted(colours.items()))
-        bands.append(
-            f'<VRTRasterBand dataType="Byte" band="{channel}"><ColorInterp>{name}</ColorInterp>'
-            f'<ComplexSource><SourceFilename relativeToVRT="0" shared="0">{filename}</SourceFilename>'
-            '<SourceBand>1</SourceBand>'
-            f'<LUT>{lookup}</LUT>'
-            f'<SrcRect xOff="0" yOff="0" xSize="{source.width}" ySize="{source.height}"/>'
-            f'<DstRect xOff="0" yOff="0" xSize="{source.width}" ySize="{source.height}"/>'
-            '</ComplexSource></VRTRasterBand>')
-    bands.append(
-        '<VRTRasterBand dataType="Byte" band="4"><ColorInterp>Alpha</ColorInterp>'
-        f'<SimpleSource><SourceFilename relativeToVRT="0" shared="0">{filename}</SourceFilename>'
-        '<SourceBand>mask,1</SourceBand>'
-        f'<SrcRect xOff="0" yOff="0" xSize="{source.width}" ySize="{source.height}"/>'
-        f'<DstRect xOff="0" yOff="0" xSize="{source.width}" ySize="{source.height}"/>'
-        '</SimpleSource></VRTRasterBand>')
-    # Colour decoding is an image-grid operation. A north-up private grid
-    # avoids platform-dependent warp clipping of rotated georeferenced edges.
-    # The caller retains the source CRS and affine for the resulting raster.
-    image_transform = Affine(1, 0, 0, 0, -1, source.height)
-    xml = (f'<VRTDataset rasterXSize="{source.width}" rasterYSize="{source.height}">'
-           '<SRS>EPSG:3857</SRS>'
-           f'<GeoTransform>{",".join(map(str, image_transform.to_gdal()))}</GeoTransform>'
-           f'{"".join(bands)}</VRTDataset>')
-    with MemoryFile(xml.encode('utf-8')) as memory, memory.open() as expanded:
-        transform = image_transform * Affine.scale(source.width/width, source.height/height)
-        with WarpedVRT(expanded, crs='EPSG:3857', transform=transform, width=width,
-                       height=height, src_alpha=4, resampling=Resampling.bilinear,
-                       warp_mem_limit=32) as decoded:
-            return decoded.read([1, 2, 3])
+    table = np.zeros((max(colours)+1, 3), np.uint8)
+    for index, value in colours.items():
+        table[index] = value[:3]
+    try:
+        with rasterio.open(path, 'w', driver='GTiff', width=source.width,
+                           height=source.height, count=4, dtype='uint8',
+                           crs=source.crs, transform=source.transform, tiled=True,
+                           blockxsize=512, blockysize=512, compress='deflate',
+                           zlevel=1, predictor=2, BIGTIFF='IF_SAFER') as expanded:
+            expanded.colorinterp = (ColorInterp.red, ColorInterp.green,
+                                    ColorInterp.blue, ColorInterp.alpha)
+            for y in range(0, source.height, 512):
+                for x in range(0, source.width, 512):
+                    window = Window(x, y, min(512, source.width-x), min(512, source.height-y))
+                    indices = source.read(1, window=window)
+                    rgba = np.empty((4, int(window.height), int(window.width)), np.uint8)
+                    rgba[:3] = np.moveaxis(table[indices], -1, 0)
+                    rgba[3] = source.dataset_mask(window=window)
+                    expanded.write(rgba, window=window)
+        return path
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def _palette_rgb(source, width, height):
+    # Decode native indices in bounded blocks before RGB resampling. A real
+    # temporary RGBA dataset avoids native VRT mask/colour-table pointer issues
+    # seen across GDAL builds. Reuse it for overview and detailed analysis.
+    key = _source_identity(source)
+    cached = _palette_files.get(key)
+    if cached is not None and not cached[0].is_file():
+        del _palette_files[key]
+        cached = None
+    with rasterio.Env(GDAL_CACHEMAX=32_000_000):
+        if cached is None:
+            path = _expand_palette(source)
+            size = path.stat().st_size
+            keep = key is not None and size <= _PALETTE_CACHE_BYTES
+            if keep:
+                while _palette_files and (len(_palette_files) >= 2 or
+                        sum(item[1] for item in _palette_files.values())+size > _PALETTE_CACHE_BYTES):
+                    _, (old, _) = _palette_files.popitem(last=False)
+                    old.unlink(missing_ok=True)
+                _palette_files[key] = path, size
+        else:
+            path, _ = cached
+            keep = True
+            _palette_files.move_to_end(key)
+        try:
+            with rasterio.open(path) as expanded:
+                return expanded.read([1, 2, 3], out_shape=(3, height, width),
+                                     resampling=Resampling.bilinear)
+        finally:
+            if not keep:
+                path.unlink(missing_ok=True)
 
 
 def read_rgb(source, width, height):

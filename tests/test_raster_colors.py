@@ -98,3 +98,79 @@ def test_palette_colours_do_not_depend_on_the_geographic_grid(tmp_path):
         decoded.append(raster)
     np.testing.assert_array_equal(decoded[0].rgb, decoded[1].rgb)
     np.testing.assert_array_equal(decoded[0].valid, decoded[1].valid)
+
+
+def test_palette_internal_mask_excludes_hidden_colours_but_keeps_valid_black(tmp_path):
+    path = tmp_path/'internal-mask.tif'
+    indices = np.ones((80, 100), np.uint8)
+    indices[20:40, 20:40] = 2  # Hidden blue must not tint adjacent valid paper.
+    indices[50:70, 70:90] = 0  # Real black is valid, not NoData.
+    mask = np.full(indices.shape, 255, np.uint8)
+    mask[20:40, 20:40] = 0
+    with rasterio.open(path, 'w', driver='GTiff', width=100, height=80, count=1,
+                       dtype='uint8', crs='EPSG:26713', transform=TRANSFORM) as dst:
+        dst.write(indices, 1)
+        dst.write_colormap(1, {0: (0, 0, 0, 255), 1: (235, 180, 120, 255), 2: (30, 70, 250, 255)})
+        dst.write_mask(mask)
+    actual = read_raster(path, max_side=50)
+    assert (~actual.valid).sum() == 100
+    y, x = np.indices(actual.valid.shape)
+    paper = actual.valid & ((y < 23) | (x < 33))
+    assert np.all(np.abs(actual.rgb[paper].astype(int)-[235, 180, 120]) <= 1)
+    assert actual.valid[28, 38] and not actual.rgb[28, 38].any()
+
+
+def test_palette_decode_cache_reuses_expansion_expires_and_is_bounded(tmp_path, monkeypatch):
+    from collections import OrderedDict
+    from geotrace import raster_colors as colours
+    monkeypatch.setattr(colours, '_palette_files', OrderedDict())
+    expand = colours._expand_palette
+    paths = []
+    def track(source):
+        path = expand(source)
+        paths.append(path)
+        return path
+    monkeypatch.setattr(colours, '_expand_palette', track)
+    def write(path, colour):
+        with rasterio.open(path, 'w', driver='GTiff', width=60, height=40, count=1,
+                           dtype='uint8', crs='EPSG:26713', transform=TRANSFORM) as dst:
+            dst.write(np.ones((40, 60), np.uint8), 1)
+            dst.write_colormap(1, {1: (*colour, 255)})
+    first = tmp_path/'first.tif'
+    write(first, (230, 180, 120))
+    read_raster(first, max_side=30)
+    read_raster(first, max_side=60)
+    assert len(paths) == 1
+    before = first.stat()
+    write(first, (100, 200, 230))
+    os.utime(first, ns=(before.st_atime_ns, before.st_mtime_ns+2_000_000_000))
+    np.testing.assert_array_equal(read_raster(first).rgb[10, 10], [100, 200, 230])
+    assert len(paths) == 2
+    for i in range(2):
+        path = tmp_path/f'other-{i}.tif'
+        write(path, (120, 180, 240));read_raster(path)
+    assert len(colours._palette_files) == 2 and not paths[0].exists()
+    assert sum(size for _, size in colours._palette_files.values()) <= colours._PALETTE_CACHE_BYTES
+    monkeypatch.setattr(colours, '_palette_files', OrderedDict())
+    monkeypatch.setattr(colours, '_PALETTE_CACHE_BYTES', 1)
+    read_raster(first)
+    assert not colours._palette_files and not paths[-1].exists()
+
+
+def test_uint16_byte_validation_expires_when_external_mask_changes(tmp_path):
+    path = tmp_path/'masked16.tif'
+    data = np.full((3, 40, 60), 180, np.uint16)
+    data[:, 20, 30] = 4096
+    mask = np.full((40, 60), 255, np.uint8);mask[20, 30] = 0
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=False):
+        with rasterio.open(path, 'w', driver='GTiff', width=60, height=40, count=3,
+                           dtype='uint16', crs='EPSG:26713', transform=TRANSFORM) as dst:
+            dst.write(data);dst.write_mask(mask)
+    read_raster(path)
+    sidecar = tmp_path/'masked16.tif.msk';assert sidecar.exists()
+    before = sidecar.stat()
+    with rasterio.open(sidecar, 'r+') as dst:
+        dst.write(np.full((40, 60), 255, np.uint8), 1)
+    os.utime(sidecar, ns=(before.st_atime_ns, before.st_mtime_ns+2_000_000_000))
+    with pytest.raises(ValueError, match='0–255'):
+        read_raster(path)

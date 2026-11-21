@@ -76,6 +76,10 @@ def test_workspace_groups_shift_panels_review_and_palette_visibility(tmp_path):
         assert not b.edit_selected and b.selected==-1 and b.edge_drag is None
         unchanged(snapshot)
         click('layersButton');assert item('toolsSidebar').isVisible() and view.width()==before;unchanged(snapshot)
+        panel=item('toolsSidebar');close=item('closeLayers')
+        position=close.mapToItem(panel,QPointF(0,0))
+        assert 0<=position.x() and position.x()+close.width()<=panel.width()
+        assert 0<=position.y() and position.y()+close.height()<=panel.height()
         click('closeLayers');assert not item('toolsSidebar').isVisible();assert view.width()==before;unchanged(snapshot)
         for index,tool in [(1,0),(2,5),(3,1),(4,3),(5,4),(0,0)]:
             click('toolButton_'+str(index));assert b.edit_tool==tool
