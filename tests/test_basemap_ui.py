@@ -102,7 +102,7 @@ def test_local_background_pan_zoom_save_and_preview_are_independent(tmp_path):
         backend.saveProject(QUrl.fromLocalFile(str(saved)))
         wait_job()
         restored = load_project(saved)
-        assert restored.view['basemap_file'] == str(source)
+        assert Path(restored.view['basemap_file']) == source  # QUrl uses forward slashes on Windows.
         assert restored.view['basemap_source'] == 'local'
         assert not restored.view['basemap_visible']
         assert not warnings, warnings

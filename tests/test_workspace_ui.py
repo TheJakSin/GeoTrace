@@ -35,7 +35,15 @@ def test_workspace_groups_shift_panels_review_and_palette_visibility(tmp_path):
     def center(name):
         obj=item(name);assert obj is not None and obj.isVisible() and obj.isEnabled(),name
         return obj.mapToScene(QPointF(obj.width()/2,obj.height()/2)).toPoint()
-    def click(name):QTest.mouseClick(window,Qt.LeftButton,Qt.NoModifier,center(name));QTest.qWait(70)
+    def click(name):
+        QTest.mouseMove(window,center(name));QTest.qWait(60)
+        point=center(name)
+        QTest.mousePress(window,Qt.LeftButton,Qt.NoModifier,point)
+        if not item(name).property('pressed'):
+            Path('test-screenshots').mkdir(exist_ok=True)
+            window.grabWindow().save('test-screenshots/workspace-'+name+'.png')
+        assert item(name).property('pressed'), (name,point)
+        QTest.mouseRelease(window,Qt.LeftButton,Qt.NoModifier,point);QTest.qWait(70)
     def wait():
         for _ in range(300):
             QTest.qWait(30)
@@ -68,7 +76,7 @@ def test_workspace_groups_shift_panels_review_and_palette_visibility(tmp_path):
         assert not b.edit_selected and b.selected==-1 and b.edge_drag is None
         unchanged(snapshot)
         click('layersButton');assert item('toolsSidebar').isVisible() and view.width()==before;unchanged(snapshot)
-        click('closeLayers');assert view.width()==before;unchanged(snapshot)
+        click('closeLayers');assert not item('toolsSidebar').isVisible();assert view.width()==before;unchanged(snapshot)
         for index,tool in [(1,0),(2,5),(3,1),(4,3),(5,4),(0,0)]:
             click('toolButton_'+str(index));assert b.edit_tool==tool
             assert not item('toolsSidebar').isVisible()

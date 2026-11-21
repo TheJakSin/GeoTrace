@@ -79,3 +79,22 @@ def test_numeric_single_band_is_not_treated_as_a_colour_map(tmp_path):
         dst.write(np.ones((20, 20), np.float32), 1)
     with pytest.raises(ValueError, match='цвет'):
         read_raster(path)
+
+
+def test_palette_colours_do_not_depend_on_the_geographic_grid(tmp_path):
+    indices = np.ones((80, 100), np.uint8)
+    indices[20:40, 20:40] = 0
+    indices[50:70, 70:90] = 2
+    decoded = []
+    for i, (crs, transform) in enumerate((('EPSG:26713', TRANSFORM),
+                                         ('EPSG:4326', Affine(.01, 0, 10, 0, -.01, 50)))):
+        path = tmp_path/f'palette-{i}.tif'
+        with rasterio.open(path, 'w', driver='GTiff', width=100, height=80, count=1,
+                           dtype='uint8', crs=crs, transform=transform, nodata=0) as dst:
+            dst.write(indices, 1)
+            dst.write_colormap(1, {0: (0, 0, 0, 0), 1: (235, 180, 120, 255), 2: (60, 180, 240, 255)})
+        raster = read_raster(path, max_side=50)
+        assert raster.transform == transform * Affine.scale(2)
+        decoded.append(raster)
+    np.testing.assert_array_equal(decoded[0].rgb, decoded[1].rgb)
+    np.testing.assert_array_equal(decoded[0].valid, decoded[1].valid)

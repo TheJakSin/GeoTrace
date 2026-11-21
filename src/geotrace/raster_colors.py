@@ -75,13 +75,17 @@ def _palette_rgb(source, width, height):
         f'<SrcRect xOff="0" yOff="0" xSize="{source.width}" ySize="{source.height}"/>'
         f'<DstRect xOff="0" yOff="0" xSize="{source.width}" ySize="{source.height}"/>'
         '</SimpleSource></VRTRasterBand>')
+    # Colour decoding is an image-grid operation. A north-up private grid
+    # avoids platform-dependent warp clipping of rotated georeferenced edges.
+    # The caller retains the source CRS and affine for the resulting raster.
+    image_transform = Affine(1, 0, 0, 0, -1, source.height)
     xml = (f'<VRTDataset rasterXSize="{source.width}" rasterYSize="{source.height}">'
-           f'<SRS>{escape(source.crs.to_wkt())}</SRS>'
-           f'<GeoTransform>{",".join(map(str, source.transform.to_gdal()))}</GeoTransform>'
+           '<SRS>EPSG:3857</SRS>'
+           f'<GeoTransform>{",".join(map(str, image_transform.to_gdal()))}</GeoTransform>'
            f'{"".join(bands)}</VRTDataset>')
     with MemoryFile(xml.encode('utf-8')) as memory, memory.open() as expanded:
-        transform = source.transform * Affine.scale(source.width/width, source.height/height)
-        with WarpedVRT(expanded, crs=source.crs, transform=transform, width=width,
+        transform = image_transform * Affine.scale(source.width/width, source.height/height)
+        with WarpedVRT(expanded, crs='EPSG:3857', transform=transform, width=width,
                        height=height, src_alpha=4, resampling=Resampling.bilinear,
                        warp_mem_limit=32) as decoded:
             return decoded.read([1, 2, 3])

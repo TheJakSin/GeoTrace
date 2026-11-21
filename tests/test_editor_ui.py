@@ -31,9 +31,18 @@ def test_editor_clicks_preview_apply_and_undo(tmp_path):
     def click_item(name):
         item = window.findChild(QQuickItem, name)
         assert item is not None and item.isEnabled() and item.isVisible(), name
-        point = item.mapToScene(QPointF(item.width()/2, item.height()/2))
-        QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point.toPoint())
-        QTest.qWait(30)
+        # Deliver the pointer move and let the positioner polish before pressing.
+        # A direct synthetic click can use a stale hover/layout on CI platforms.
+        QTest.mouseMove(window, item.mapToScene(QPointF(item.width()/2, item.height()/2)).toPoint())
+        QTest.qWait(60)
+        point = item.mapToScene(QPointF(item.width()/2, item.height()/2)).toPoint()
+        QTest.mousePress(window, Qt.LeftButton, Qt.NoModifier, point)
+        if not item.property('pressed'):
+            Path('test-screenshots').mkdir(exist_ok=True)
+            window.grabWindow().save('test-screenshots/editor-'+name+'.png')
+        assert item.property('pressed'), (name, point, item.width(), item.height())
+        QTest.mouseRelease(window, Qt.LeftButton, Qt.NoModifier, point)
+        QTest.qWait(60)
     def click_map(x,y):
         canvas = window.findChild(QQuickItem, 'rasterCanvas')
         point = canvas.mapToScene(QPointF(canvas.width()*x/100, canvas.height()*y/60))
