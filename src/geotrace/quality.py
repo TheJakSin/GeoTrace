@@ -577,10 +577,11 @@ def refine_contacts(objects, prepared, folder=None):
                     pixels[:, 0] *= .4
                     previous = np.linalg.norm(pixels-models[old[eligible]], axis=1)
                     proposed = np.linalg.norm(pixels-models[candidate[eligible]], axis=1)
-                    # Native exposed colour is a bounded extra vote. Ink,
+                    # A readable fill can resolve weak staircase/ink ties, but
+                    # its vote stays below the 0.85 ink-edge evidence. Ink,
                     # unsupported small regions and unrelated glyph colours
                     # retain the original line/geometry/prior decision.
-                    gain[eligible] += (.2*np.clip((previous-proposed)/8, -1, 1)
+                    gain[eligible] += (.35*np.clip((previous-proposed)/8, -1, 1)
                                        * (np.minimum(previous, proposed) <= 10))
             take = possible & (gain > .02)
             current[y[take],x[take]] = candidate[take]

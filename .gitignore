@@ -19,3 +19,4 @@ dist/
 
 # Runtime branding belongs in source packages.
 !src/geotrace/qml/*.png
+/src/geotrace/build_info.json

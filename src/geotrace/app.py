@@ -39,6 +39,7 @@ from .editing import edit_geometry, draw_polygon, move_vertex, transform_geometr
 from .automatic import preserve_work, protected_feature
 from .palette import sample_fill, split_labels
 from .quality import prepare_job as prepare_quality_job, quality_job, Cancelled
+from .release_info import version_label
 
 if QGuiApplication.instance() is None:
     QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
@@ -269,6 +270,10 @@ class Backend(QObject):
     @Property(QObject, constant=True)
     def polygonTable(self):
         return self.table
+
+    @Property(str, constant=True)
+    def releaseLabel(self):
+        return version_label()
 
     @Property('QVariantMap', notify=changed)
     def state(self):

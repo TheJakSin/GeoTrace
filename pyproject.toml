@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geotrace-desktop"
-version = "0.3.0a1"
+version = "0.8.0b1"
 description = "Experimental geological map digitization desktop"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -24,7 +24,7 @@ geotrace = "geotrace.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-geotrace = ["qml/*.qml", "qml/*.png", "qml/icons/*.svg", "webmap/*.html"]
+geotrace = ["build_info.json", "qml/*.qml", "qml/*.png", "qml/icons/*.svg", "webmap/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
