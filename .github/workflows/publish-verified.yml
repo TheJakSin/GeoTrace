@@ -26,13 +26,14 @@ jobs:
       - name: Require every native platform and reviewed documents
         shell: bash
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/jobs?per_page=100" > verified-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/jobs?per_page=100&filter=all" > verified-jobs.json
           python3 - <<'PY'
           import json,os,tomllib
           from pathlib import Path
           jobs=json.loads(Path('verified-jobs.json').read_text())['jobs']
           required={'test (windows-latest)','test (macos-15)','test (macos-15-intel)','documents'}
-          assert {j['name'] for j in jobs if j['name'] in required and j['conclusion']=='success'}==required,'Native verification is incomplete'
+          latest={j['name']:j for j in sorted(jobs,key=lambda j:j['id']) if j['name'] in required}
+          assert set(latest)==required and all(j['conclusion']=='success' for j in latest.values()),'Native verification is incomplete'
           version=tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
           assert version=='1.0.0'
           with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('VERSION='+version+'\n')
