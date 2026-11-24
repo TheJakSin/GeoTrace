@@ -353,7 +353,8 @@ def save_document(path, document, canvas=None, result=None, portable=False):
                             source_project=document.source_project)
                 meta['settings'] = document.settings
                 archive.writestr('workspace.json', json.dumps(meta, ensure_ascii=False, allow_nan=False))
-        with open(temporary, 'rb') as stream:
+        # Windows FlushFileBuffers (used by fsync) requires write access.
+        with open(temporary, 'r+b') as stream:
             os.fsync(stream.fileno())
         os.replace(temporary, path)
     finally:
