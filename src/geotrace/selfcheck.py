@@ -68,6 +68,7 @@ def start(backend,engine,report,application,folder):
                 assert b.data['layoutPreviewUrl'];b.exportLayout(QUrl.fromLocalFile(str(pdf)),json.dumps(state['layout']))
             elif step==7:
                 assert pdf.read_bytes().startswith(b'%PDF')
+                assert b.data['webMapAvailable'],'The bundled Qt WebEngine module is missing'
                 b.web_map.document=b'<!doctype html><html><head><title>GeoTrace offline renderer ready</title></head><body>GeoTrace offline browser check</body></html>'
                 b.openWebMap()
                 engine.rootObjects()[0].findChild(QObject,'workspaceTabs').setProperty('currentIndex',1)

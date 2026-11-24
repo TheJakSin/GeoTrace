@@ -60,7 +60,7 @@ def manual(folder):
 
 def notices(folder):
     folder.mkdir(parents=True,exist_ok=True)
-    packages=['PySide6','PySide6-Essentials','PySide6-Addons','shiboken6','rasterio','fiona','pyproj','shapely','numpy','scipy','scikit-image','pillow','opencv-python-headless','certifi','pyinstaller']
+    packages=['PySide6','PySide6-Essentials','PySide6-Addons','PySide6-WebEngine','PySide6-Pdf','shiboken6','rasterio','fiona','pyproj','shapely','numpy','scipy','scikit-image','pillow','opencv-python-headless','certifi','pyinstaller']
     lines=['GeoTrace использует открытые библиотеки. Уведомления и лицензии поставляются рядом с приложением.\n']
     for name in packages:
         try:
@@ -123,6 +123,11 @@ def main():
     info=read_build_info()
     if not info:
         raise SystemExit('Stamp an actual Checks build identity before creating distribution installers.')
+    # Qt 6.12 distributes WebEngine separately from Addons. Require the native
+    # module before freezing rather than silently producing an incomplete tab.
+    import importlib.util
+    if importlib.util.find_spec('PySide6.QtWebEngineQuick') is None:
+        raise SystemExit('Install the full PySide6 dependency, including WebEngine, before packaging.')
     version=__version__;number=info['number'];arch=platform.machine().lower().replace('amd64','x64')
     if sys.platform not in ('win32','darwin'):raise SystemExit('Native Windows/macOS build required.')
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
