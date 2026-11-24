@@ -1,0 +1,312 @@
+{
+  "version": "1.0.0",
+  "build": 15,
+  "source_commit": "05e68af92e6ef9f5f3810dddbb90ac8866ef8940",
+  "run_url": "https://github.com/TheJakSin/GeoTrace/actions/runs/45507438504",
+  "release_url": "https://github.com/TheJakSin/GeoTrace/releases/tag/v1.0.0",
+  "published_at": "2026-11-24T23:33:26Z",
+  "publication_run_url": "https://github.com/TheJakSin/GeoTrace/actions/runs/45510677237",
+  "source_workflow_conclusion": "failure",
+  "publication_conclusion": "success",
+  "platforms": {
+    "macos-15": {
+      "job_conclusion": "success",
+      "test_reports": [
+        "9 passed, 18 warnings in 0.55s",
+        "332 passed, 3485 warnings in 95.95s (0:01:35)"
+      ],
+      "selfchecks": [
+        {
+          "ok": true,
+          "seconds": 4.756,
+          "error": null,
+          "version": "1.0.0",
+          "build": {
+            "version": "1.0.0",
+            "number": 15,
+            "commit": "05e68af92e6ef9f5f3810dddbb90ac8866ef8940",
+            "run_url": "https://github.com/TheJakSin/GeoTrace/actions/runs/45507438504",
+            "built_utc": "2026-11-24T23:11:03.644240+00:00"
+          },
+          "sheets": 2,
+          "polygons": 4,
+          "lines": 1,
+          "display_crs": "EPSG:3857",
+          "gdal": "3.10.3",
+          "fiona_gdal": "3.9.2",
+          "geopackage": true,
+          "pdf": true,
+          "browser_renderer": true
+        },
+        {
+          "ok": true,
+          "seconds": 5.676,
+          "error": null,
+          "version": "1.0.0",
+          "build": {
+            "version": "1.0.0",
+            "number": 15,
+            "commit": "05e68af92e6ef9f5f3810dddbb90ac8866ef8940",
+            "run_url": "https://github.com/TheJakSin/GeoTrace/actions/runs/45507438504",
+            "built_utc": "2026-11-24T23:11:03.644240+00:00"
+          },
+          "sheets": 2,
+          "polygons": 4,
+          "lines": 1,
+          "display_crs": "EPSG:3857",
+          "gdal": "3.10.3",
+          "fiona_gdal": "3.9.2",
+          "geopackage": true,
+          "pdf": true,
+          "browser_renderer": true
+        }
+      ]
+    },
+    "windows-latest": {
+      "job_conclusion": "success",
+      "test_reports": [
+        "9 passed, 18 warnings in 1.88s",
+        "332 passed, 3485 warnings in 106.26s (0:01:46)"
+      ],
+      "selfchecks": [
+        {
+          "ok": true,
+          "seconds": 6.187,
+          "error": null,
+          "version": "1.0.0",
+          "build": {
+            "version": "1.0.0",
+            "number": 15,
+            "commit": "05e68af92e6ef9f5f3810dddbb90ac8866ef8940",
+            "run_url": "https://github.com/TheJakSin/GeoTrace/actions/runs/45507438504",
+            "built_utc": "2026-11-24T23:12:09.127571+00:00"
+          },
+          "sheets": 2,
+          "polygons": 4,
+          "lines": 1,
+          "display_crs": "EPSG:3857",
+          "gdal": "3.10.3",
+          "fiona_gdal": "3.9.1",
+          "geopackage": true,
+          "pdf": true,
+          "browser_renderer": true
+        },
+        {
+          "ok": true,
+          "seconds": 6,
+          "error": null,
+          "version": "1.0.0",
+          "build": {
+            "version": "1.0.0",
+            "number": 15,
+            "commit": "05e68af92e6ef9f5f3810dddbb90ac8866ef8940",
+            "run_url": "https://github.com/TheJakSin/GeoTrace/actions/runs/45507438504",
+            "built_utc": "2026-11-24T23:12:09.127571+00:00"
+          },
+          "sheets": 2,
+          "polygons": 4,
+          "lines": 1,
+          "display_crs": "EPSG:3857",
+          "gdal": "3.10.3",
+          "fiona_gdal": "3.9.1",
+          "geopackage": true,
+          "pdf": true,
+          "browser_renderer": true
+        }
+      ]
+    },
+    "macos-15-intel": {
+      "job_conclusion": "success",
+      "test_reports": [
+        "9 passed, 18 warnings in 1.25s",
+        "332 passed, 3487 warnings in 194.58s (0:03:14)"
+      ],
+      "selfchecks": [
+        {
+          "ok": true,
+          "seconds": 11.707,
+          "error": null,
+          "version": "1.0.0",
+          "build": {
+            "version": "1.0.0",
+            "number": 15,
+            "commit": "05e68af92e6ef9f5f3810dddbb90ac8866ef8940",
+            "run_url": "https://github.com/TheJakSin/GeoTrace/actions/runs/45507438504",
+            "built_utc": "2026-11-24T23:13:44.078342+00:00"
+          },
+          "sheets": 2,
+          "polygons": 4,
+          "lines": 1,
+          "display_crs": "EPSG:3857",
+          "gdal": "3.10.3",
+          "fiona_gdal": "3.9.2",
+          "geopackage": true,
+          "pdf": true,
+          "browser_renderer": true
+        },
+        {
+          "ok": true,
+          "seconds": 19.345,
+          "error": null,
+          "version": "1.0.0",
+          "build": {
+            "version": "1.0.0",
+            "number": 15,
+            "commit": "05e68af92e6ef9f5f3810dddbb90ac8866ef8940",
+            "run_url": "https://github.com/TheJakSin/GeoTrace/actions/runs/45507438504",
+            "built_utc": "2026-11-24T23:13:44.078342+00:00"
+          },
+          "sheets": 2,
+          "polygons": 4,
+          "lines": 1,
+          "display_crs": "EPSG:3857",
+          "gdal": "3.10.3",
+          "fiona_gdal": "3.9.2",
+          "geopackage": true,
+          "pdf": true,
+          "browser_renderer": true
+        }
+      ]
+    }
+  },
+  "assets": [
+    {
+      "name": "GeoTrace-1.0-Overview.docx",
+      "bytes": 413630,
+      "sha256": "dca02e3fba5c9ebba079054e52339f753127a8ab94273a1efc03c8ebca57aee3",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/GeoTrace-1.0-Overview.docx"
+    },
+    {
+      "name": "GeoTrace-1.0-Overview.pdf",
+      "bytes": 173390,
+      "sha256": "2b997ad2823e06590a1464c565b74b1424c7ec19afa2f5af20c2fb2a89416059",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/GeoTrace-1.0-Overview.pdf"
+    },
+    {
+      "name": "GeoTrace-1.0-User-Guide.docx",
+      "bytes": 1053250,
+      "sha256": "8ad6ba7e78ad0f4b6e4252c6faefb71efbe52cf008e52241fc806ffb6c4e9317",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/GeoTrace-1.0-User-Guide.docx"
+    },
+    {
+      "name": "GeoTrace-1.0-User-Guide.pdf",
+      "bytes": 503238,
+      "sha256": "fcc22345db576dfc235d811387373280e74fc386d42949c318a827f269366a27",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/GeoTrace-1.0-User-Guide.pdf"
+    },
+    {
+      "name": "GeoTrace-1.0.0-build15-macOS-arm64.pkg",
+      "bytes": 309344954,
+      "sha256": "a0537a62b1396e7c724d376a904d0331d1b6dce54d833bfdac2bb2da7ddada42",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/GeoTrace-1.0.0-build15-macOS-arm64.pkg"
+    },
+    {
+      "name": "GeoTrace-1.0.0-build15-macOS-arm64.zip",
+      "bytes": 311447677,
+      "sha256": "e345af681dd439b9a121f9c7767b3f70aeb3bd49a447749503cbc71f50222bc3",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/GeoTrace-1.0.0-build15-macOS-arm64.zip"
+    },
+    {
+      "name": "GeoTrace-1.0.0-build15-macOS-x86_64.pkg",
+      "bytes": 333778945,
+      "sha256": "19a9086f92a311a4c5c487b17b1cbd9f977a02289612ea27a67c439ccba0319c",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/GeoTrace-1.0.0-build15-macOS-x86_64.pkg"
+    },
+    {
+      "name": "GeoTrace-1.0.0-build15-macOS-x86_64.zip",
+      "bytes": 335873503,
+      "sha256": "2a1a7c22d0a9522a0afa1199d3622d2f64df793244ecbd6c792f7ae76c6b7fc5",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/GeoTrace-1.0.0-build15-macOS-x86_64.zip"
+    },
+    {
+      "name": "GeoTrace-1.0.0-build15-Windows-x64-Setup.exe",
+      "bytes": 257225876,
+      "sha256": "8bfe53bbcd1721603cb59eb532dc096457fd8a3e9ccdd5244e2444821ae3c075",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/GeoTrace-1.0.0-build15-Windows-x64-Setup.exe"
+    },
+    {
+      "name": "GeoTrace-1.0.0-build15-Windows-x64.zip",
+      "bytes": 378828531,
+      "sha256": "978cb1b7c9f265b7605630ff059b8085a7ef758462bdc83b312992d6aee12807",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/GeoTrace-1.0.0-build15-Windows-x64.zip"
+    },
+    {
+      "name": "installed-macos-15-intel.json",
+      "bytes": 513,
+      "sha256": "c820556baf4a39d1424edf9b3e28e5c6467932fed3185149acb4e2df35aec42e",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/installed-macos-15-intel.json"
+    },
+    {
+      "name": "installed-macos-15-intel.png",
+      "bytes": 49317,
+      "sha256": "06cb0414796b684f962c497b86e952fc3b261c79623af3f84246c63d8f1ecad3",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/installed-macos-15-intel.png"
+    },
+    {
+      "name": "installed-macos-15.json",
+      "bytes": 512,
+      "sha256": "415b22dbab1dac9755dda6f5fa2ef65eb635a11aeb459313648ae86035f4586a",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/installed-macos-15.json"
+    },
+    {
+      "name": "installed-macos-15.png",
+      "bytes": 49592,
+      "sha256": "929e8f88e3ec4ccbee1eb11096f70115ca1eb1770e39a194e11a001584c47255",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/installed-macos-15.png"
+    },
+    {
+      "name": "installed-Windows.json",
+      "bytes": 531,
+      "sha256": "df01fbc59b4f13e2e7736ce8c0c397d0cbb0d8a7b795f7b80afc035240bf0f90",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/installed-Windows.json"
+    },
+    {
+      "name": "installed-Windows.png",
+      "bytes": 12292,
+      "sha256": "f403a639944e1b7f5fbd31340949693a20a85b986abd2d50dc812b1061d5a4fa",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/installed-Windows.png"
+    },
+    {
+      "name": "selfcheck-darwin-arm64.json",
+      "bytes": 512,
+      "sha256": "77827f297623b9816994364004cc149d2258ea580ac170a04d45ae3f71f7f195",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/selfcheck-darwin-arm64.json"
+    },
+    {
+      "name": "selfcheck-darwin-arm64.png",
+      "bytes": 49368,
+      "sha256": "331d9893994b3f35856686a07de28054e0e0d5e5aa4d1da542f6d634eea9f38b",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/selfcheck-darwin-arm64.png"
+    },
+    {
+      "name": "selfcheck-darwin-x86_64.json",
+      "bytes": 513,
+      "sha256": "9c030f87551e2cd47fc359570cd2af0e8046e901437a0f5240acbdf05536ac8b",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/selfcheck-darwin-x86_64.json"
+    },
+    {
+      "name": "selfcheck-darwin-x86_64.png",
+      "bytes": 49622,
+      "sha256": "ba0b6a1028642f9197dc51889d05120789e1b2db6a301b5778b1aeeaab148846",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/selfcheck-darwin-x86_64.png"
+    },
+    {
+      "name": "selfcheck-win32-x64.json",
+      "bytes": 533,
+      "sha256": "83ba55f2a7f4fc3cc4473a2129a2be7b7c87897b6a6d0209992bd3f9bc82c0d9",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/selfcheck-win32-x64.json"
+    },
+    {
+      "name": "selfcheck-win32-x64.png",
+      "bytes": 12293,
+      "sha256": "f7cea693a5fa441999b3334416e6aa0727617654fd7260170245b792f1e0c2d8",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/selfcheck-win32-x64.png"
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "bytes": 2116,
+      "sha256": "60e7a3be2228f61a71e6a33d9f68244554d7ec1e22ca9a1f742628bc0be42383",
+      "url": "https://github.com/TheJakSin/GeoTrace/releases/download/v1.0.0/SHA256SUMS.txt"
+    }
+  ]
+}
