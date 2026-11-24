@@ -9,6 +9,8 @@ from pathlib import Path
 import json
 import math
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import cv2
 import numpy as np
@@ -29,8 +31,23 @@ class Cancelled(Exception):
     pass
 
 
+_progress_scope=ContextVar('quality_progress_scope',default=(0.,1.,''))
+
+
+@contextmanager
+def progress_scope(offset,span,prefix=''):
+    token=_progress_scope.set((offset,span,prefix))
+    try:
+        yield
+    finally:
+        _progress_scope.reset(token)
+
+
 def checkpoint(folder, stage, progress):
     if folder:
+        offset,span,prefix=_progress_scope.get()
+        progress=offset+progress*span
+        stage=prefix+stage
         folder = Path(folder)
         if (folder/'quality-cancel').exists():
             raise Cancelled('Расчёт остановлен. Прежние полигоны сохранены.')

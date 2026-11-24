@@ -7,6 +7,7 @@ from threading import RLock, Thread, BoundedSemaphore
 from collections import OrderedDict
 from io import BytesIO
 import re
+from html import escape
 
 from PIL import Image
 from rasterio.transform import from_bounds
@@ -46,7 +47,7 @@ def project_context(raster):
                 bounds=[points.min(axis=0).tolist(), points.max(axis=0).tolist()])
 
 
-def vector_context(result):
+def vector_context(result, document=None):
     """Yandex GeoObject coordinates use latitude, longitude (including hole rings)."""
     features = []
     if result is not None:
@@ -59,9 +60,20 @@ def vector_context(result):
             geometry['coordinates'] = swap(geometry['coordinates'])
             properties = feature['properties']
             rgb = result.colors[int(properties['class_id'])-1]
+            cls=document.classes[int(properties['class_id'])-1] if document is not None else None
+            style=cls['style'] if cls else dict(fill='#%02x%02x%02x'%tuple(rgb),outline='#184e55',width=1.4,opacity=1)
             features.append(dict(type='Feature', id=int(properties['object_id']), geometry=geometry,
-                properties=dict(hintContent=f"Полигон № {properties['object_id']} · группа {properties['class_id']}"),
-                options=dict(fillColor='#%02x%02x%02x' % tuple(rgb), strokeColor='#184e55', strokeWidth=1.4)))
+                properties=dict(kind='polygon',baseFillOpacity=style['opacity'],hintContent=f"Полигон № {properties['object_id']} · "+escape(cls['name'] if cls else f"группа {properties['class_id']}")),
+                options=dict(fillColor=style['fill'], strokeColor=style['outline'], strokeWidth=style['width'])))
+        if document is not None:
+            types={t['id']:t for t in document.line_types}
+            for index,f in enumerate(document.clipped_lines()):
+                t=types[f['properties']['type_id']];style=t['style']
+                geometry=transform_geom('EPSG:3857','EPSG:4326',mapping(f['geometry']))
+                geometry['coordinates']=[[float(y),float(x)] for x,y,*_ in geometry['coordinates']]
+                features.append(dict(type='Feature',id=f'line:{f["properties"]["object_id"]}:{index}',geometry=geometry,
+                    properties=dict(kind='line',hintContent=escape(t['name'])+f' · № {f["properties"]["object_id"]}'),
+                    options=dict(strokeColor=style['color'],strokeWidth=style['width'],strokeStyle=style['dash'])))
     return dict(type='FeatureCollection', features=features)
 
 
@@ -117,6 +129,7 @@ class WebMapServer:
         self.vectors = vector_context(None)
         self.raster = self.result = self.tiles = None
         self.raster_revision = self.vector_revision = 0
+        self.style_revision=None
         self.snapshot_lock = RLock()
         self.document = (Path(__file__).parent/'webmap'/'index.html').read_bytes()
         self.lock = RLock()
@@ -131,24 +144,26 @@ class WebMapServer:
             if context is not None:
                 self.context = context
 
-    def set_project(self, raster, result):
+    def set_project(self, raster, result, document=None, style_revision=None):
         # Snapshots are rebuilt only when their source objects change, never on selection/status.
         with self.snapshot_lock:
             raster_changed = raster is not self.raster
-            result_changed = result is not self.result
+            result_changed = result is not self.result or style_revision!=self.style_revision
             if not raster_changed and not result_changed:
                 return
             context = project_context(raster)
             tiles = RasterTiles(raster) if raster_changed and raster is not None else self.tiles
-            vectors = vector_context(result) if result_changed else self.vectors
+            vectors = vector_context(result,document) if result_changed else self.vectors
             with self.lock:
                 if raster_changed:
                     self.raster_revision += 1
                 if result_changed:
                     self.vector_revision += 1
                 context.update(rasterRevision=self.raster_revision, vectorRevision=self.vector_revision,
-                               rasterAvailable=raster is not None, polygonCount=len(vectors['features']))
+                               rasterAvailable=raster is not None, polygonCount=sum(f['properties'].get('kind')!='line' for f in vectors['features']),
+                               lineCount=sum(f['properties'].get('kind')=='line' for f in vectors['features']))
                 self.raster, self.result = raster, result
+                self.style_revision=style_revision
                 self.tiles = tiles if raster is not None else None
                 self.vectors, self.context = vectors, context
 

@@ -1,3 +1,3 @@
 """GeoTrace: experimental desktop digitization."""
 
-__version__ = "0.8.0b1"
+__version__ = "1.0.0"

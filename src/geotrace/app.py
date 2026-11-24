@@ -1752,56 +1752,8 @@ class Backend(QObject):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--map')
-    parser.add_argument('--auto', action='store_true')
-    parser.add_argument('--sam-checkpoint', help='Optional local MobileSAM vit_t weights; no automatic download')
-    parser.add_argument('--screenshot', help='Developer smoke check: save window after processing and exit')
-    args = parser.parse_args()
-    QQuickStyle.setStyle('Basic')
-    if importlib.util.find_spec('PySide6.QtWebEngineQuick') is not None:
-        from PySide6.QtWebEngineQuick import QtWebEngineQuick
-        QtWebEngineQuick.initialize()
-    app = QGuiApplication(sys.argv[:1])
-    app.setApplicationName('GeoTrace')
-    app.setOrganizationName('GeoTrace')
-    backend = Backend(args.sam_checkpoint)
-    backend.prepare_on_import = not args.auto
-    engine = QQmlApplicationEngine()
-    engine.rootContext().setContextProperty('backend', backend)
-    engine.load(QUrl.fromLocalFile(str(Path(__file__).parent / 'qml' / 'Main.qml')))
-    if not engine.rootObjects():
-        backend.basemap_loader.close()
-        backend.pool.shutdown(wait=False, cancel_futures=True)
-        return 1
-    if args.auto:
-        backend.mapLoaded.connect(lambda: QTimer.singleShot(0, lambda: backend.run(7, 80)))
-    if args.map:
-        QTimer.singleShot(0, lambda: backend.openFile(QUrl.fromLocalFile(str(Path(args.map).resolve()))))
-    if args.screenshot:
-        check = QTimer()
-        check.setInterval(300)
-        def capture():
-            if backend.data['error']:
-                print(backend.data['status'], file=sys.stderr)
-                app.exit(2)
-            elif not backend.data['busy'] and (backend.result is not None or not args.auto):
-                check.stop()
-                def save():
-                    ok = engine.rootObjects()[0].grabWindow().save(args.screenshot)
-                    app.exit(0 if ok else 3)
-                QTimer.singleShot(500, save)
-        check.timeout.connect(capture)
-        check.start()
-        QTimer.singleShot(120000, lambda: app.exit(4))
-    result = app.exec()
-    backend.basemap_loader.close()
-    backend.web_map.close()
-    backend.pool.shutdown(wait=True, cancel_futures=True)
-    del engine
-    backend.sample_lab = None
-    backend.temp.cleanup()
-    return result
+    from .launcher import main as launch
+    return launch()
 
 
 if __name__ == '__main__':

@@ -11,13 +11,33 @@ ApplicationWindow {
     visible: true
     title: (root.appState.dirty ? "● " : "") + (root.appState.projectName || "Новый проект") + " — GeoTrace " + backend.releaseLabel
     color: "#e8ebef"
+    palette.window:"#f3f5f8"
+    palette.windowText:"#263445"
+    palette.base:"#ffffff"
+    palette.text:"#263445"
+    palette.buttonText:"#303944"
+    palette.button:"#f0f2f5"
+    palette.placeholderText:"#7b8593"
+    palette.highlight:"#356ac3"
+    palette.highlightedText:"#ffffff"
+    property alias mapViewport:viewport
     Material.theme: Material.Light
     Material.accent: "#356ac3"
     font.family: Qt.platform.os === "osx" ? "Helvetica Neue" : "Segoe UI"
     font.pixelSize: 13
     property var appState: backend.state
+    readonly property bool workspaceMode: appState.workspaceEnabled===true
+    readonly property bool lineEditing: workspaceMode && appState.lineMode===true && !viewing && !originalOnly
+    property int lineColourPending: 0
+    property bool layoutFrameMode: false
+    property bool matchingHighlight:true
+    property int lineSampleType:0
+    property bool lineSampleSourceOnly:false
+    property bool lineSampleOriginal:false
+    function openWorkspacePanel(name) {if(workspaceOverlay.item)workspaceOverlay.item.openPanel(name)}
     property bool closingConfirmed: false
     property string pendingAction: ""
+    property url pendingExternalFile
     property bool continueAfterSave: false
     property bool webMapOpened: false
     property bool sidebarOpen: false
@@ -36,15 +56,23 @@ ApplicationWindow {
     onComparisonEnabledChanged: backend.setCompareShortcutEnabled(comparisonEnabled)
     Component.onDestruction: backend.setCompareShortcutEnabled(false)
     function chooseTool(index, lasso) {
+        if(workspaceMode && appState.lineMode) {
+            backend.setLineTool(({0:"select",1:"split",3:"draw",4:"vertex",5:"drag"})[index]||"select")
+            viewing=false;viewport.forceActiveFocus();return
+        }
         viewing=false; modeTabs.currentIndex=2; editTool.currentIndex=index; lassoToggle.checked=lasso
         viewport.forceActiveFocus()
     }
     function chooseView() { modeTabs.currentIndex=0; viewing=true; viewport.forceActiveFocus() }
     function escapeMap() {
+        if(lineSampleType){lineSampleType=0;originalOnly=lineSampleOriginal;return}
+        if(appState.groupMatching===true){backend.endGroupMatching();return}
+        if(workspaceMode && appState.lineMode){backend.clearLineDraft();layoutFrameMode=false;return}
         if(appState.editPoints.length) backend.clearEditLine()
         else { backend.clearEditSelection(); chooseView() }
     }
     function finishEdit() {
+        if(lineEditing){backend.finishLine();return}
         if(appState.geometryReady) backend.acceptGeometry()
         else if(appState.autoReady) backend.acceptAuto()
         else if(linePreviewButton.visible && linePreviewButton.enabled) linePreviewButton.clicked()
@@ -137,7 +165,7 @@ ApplicationWindow {
             currentIndex: input.currentValue === undefined || input.currentValue === null ? 0 : input.field.type === "boolean" ? (input.currentValue ? 1 : 2) : input.field.choices.indexOf(input.currentValue)+1
         }
     }
-    property bool autosavePaused: helpDialog.visible || autoOptions.visible || promptOptions.visible || mapSettings.visible || webKeyDialog.visible || yandexKeyDialog.visible || basemapFileDialog.visible || areaFileDialog.visible || areaDialog.visible || openDialog.visible || saveDialog.visible || projectSaveDialog.visible || discard.visible || recoveryDialog.visible || busyDialog.visible || edgeDialog.visible || mapMouse.vertexDragging || mapMouse.edgeDragging || mapMouse.lassoDragging || schemaManager.visible || fieldDialog.visible || deleteFieldDialog.visible || bulkConfirm.visible || paletteDialog.visible
+    property bool autosavePaused: (workspaceOverlay.item && workspaceOverlay.item.modalOpen) || helpDialog.visible || autoOptions.visible || promptOptions.visible || mapSettings.visible || webKeyDialog.visible || yandexKeyDialog.visible || basemapFileDialog.visible || areaFileDialog.visible || areaDialog.visible || openDialog.visible || saveDialog.visible || projectSaveDialog.visible || discard.visible || recoveryDialog.visible || busyDialog.visible || edgeDialog.visible || mapMouse.vertexDragging || mapMouse.edgeDragging || mapMouse.lineDragging || mapMouse.lassoDragging || schemaManager.visible || fieldDialog.visible || deleteFieldDialog.visible || bulkConfirm.visible || paletteDialog.visible
     onAutosavePausedChanged: backend.pauseAutosave(autosavePaused)
     function saveProject() {
         if (root.appState.busy) return
@@ -203,6 +231,7 @@ ApplicationWindow {
         else perform(action)
     }
     function perform(action) {
+        if(action==="external"){backend.openFile(pendingExternalFile);pendingExternalFile="";return}
         if (action === "open") openDialog.open()
         if (action === "run") {
             if (autoProfile.currentIndex === 2) backend.previewQuality()
@@ -213,6 +242,7 @@ ApplicationWindow {
     onClosing: function(event) {
         if (root.appState.busy) { event.accepted = false; busyDialog.open() }
         else if (root.appState.dirty && !closingConfirmed) { event.accepted = false; request("close") }
+        if(event.accepted && workspaceOverlay.item)workspaceOverlay.item.closeWindows()
     }
     FileDialog {
         id: openDialog
@@ -271,7 +301,7 @@ ApplicationWindow {
     Dialog {
         id: areaDialog; objectName: "areaDialog"
         anchors.centerIn: parent; modal: true; width: 460
-        title: "Обрезка по KML"
+        title: root.workspaceMode?"Участок проекта · KML":"Обрезка по KML"
         onAboutToShow: { areaChoice.currentIndex = 0; backend.previewArea(0) }
         onClosed: backend.dismissArea()
         contentItem: ColumnLayout {
@@ -283,7 +313,7 @@ ApplicationWindow {
             }
             Label {
                 Layout.fillWidth: true; wrapMode: Text.WordWrap
-                text: "Останется карта внутри выбранного контура, включая вырезы. Лишние части изображения и полигонов будут удалены из рабочей карты. Исходный файл сохранится. Доступна отмена."
+                text: root.workspaceMode?"Общий результат будет ограничен участком, включая вырезы. Полные листы и их палитры сохранятся для оцифровки. Если карты ещё не добавлены, их можно загрузить следующим шагом.":"Останется карта внутри выбранного контура, включая вырезы. Лишние части изображения и полигонов будут удалены из рабочей карты. Исходный файл сохранится. Доступна отмена."
             }
             Label {
                 Layout.fillWidth: true; wrapMode: Text.WordWrap
@@ -293,8 +323,8 @@ ApplicationWindow {
                 Layout.alignment: Qt.AlignRight
                 ActionButton { text: "Отмена"; onClicked: areaDialog.close() }
                 ActionButton {
-                    text: "Обрезать"; objectName: "applyAreaButton"; highlighted: true
-                    enabled: !root.appState.busy && !!root.appState.areaDraftUrl
+                    text: root.workspaceMode?"Выбрать участок":"Обрезать"; objectName: "applyAreaButton"; highlighted: true
+                    enabled: !root.appState.busy && (!!root.appState.areaDraftUrl || (root.workspaceMode&&!root.appState.rasterUrl&&root.appState.areaOptions.length>0))
                     onClicked: { backend.applyArea(areaChoice.currentIndex); areaDialog.close() }
                 }
             }
@@ -303,7 +333,7 @@ ApplicationWindow {
     Connections { target: backend; function onAreaPrepared() { areaDialog.open() } }
     FileDialog {
         id: saveDialog
-        title: "Сохранить новую версию полигонов"
+        title: root.workspaceMode?"Экспорт слоёв GeoPackage":"Сохранить новую версию полигонов"
         fileMode: FileDialog.SaveFile
         defaultSuffix: "gpkg"
         nameFilters: ["GeoPackage (*.gpkg)"]
@@ -559,7 +589,8 @@ ApplicationWindow {
         onRejected: backend.cancelBulk()
     }
     Dialog {
-        id: paletteDialog; objectName: "paletteDialog"
+        id: paletteDialog;
+        property int linePicking: 0; objectName: "paletteDialog"
         title: "Подготовка карты · целевые заливки"; modal: false; padding: 20
         margins: 0; focus: true; closePolicy: Popup.CloseOnEscape
         enter: Transition {}
@@ -569,6 +600,7 @@ ApplicationWindow {
         background: Rectangle { color: "#ffffff"; radius: 0; border.color: "#dce0e6" }
         property bool picking: false
         property int focused: 0
+        property bool framing: false
         property bool colourPreview: true
         function includeColour(ident,enabled) {
             backend.includePalette(ident,enabled)
@@ -580,7 +612,7 @@ ApplicationWindow {
         }
         property string rasterKey: ""
         onAboutToShow: {
-            picking=false
+            picking=false;framing=false;linePicking=0
             if(rasterKey!==root.appState.rasterUrl){rasterKey=root.appState.rasterUrl;focused=0;paletteViewport.fitMap();backend.focusPalette(0)}
         }
         contentItem: ColumnLayout {
@@ -629,14 +661,20 @@ ApplicationWindow {
                     Label { visible: !!root.appState.paletteMessage; text: root.appState.paletteMessage; Layout.fillWidth: true; wrapMode: Text.WordWrap; font.pixelSize: 12 }
                     ActionButton { objectName: "resetPaletteButton"; text: "Вернуть автоматический выбор"; Layout.fillWidth: true
                         onClicked: { backend.resetPalette(); paletteDialog.focused=0 } }
+                    ActionButton {visible:root.workspaceMode;text:paletteDialog.framing?"Обведите рамку карты…":"Рамка листа без легенды";Layout.fillWidth:true;highlighted:paletteDialog.framing
+                        onClicked:{paletteDialog.framing=!paletteDialog.framing;paletteDialog.picking=false}}
+                    ActionButton {visible:root.workspaceMode;text:"Сбросить рамку листа";Layout.fillWidth:true;onClicked:{backend.resetSheetFrame();paletteDialog.close()}}
                 }
                 PaletteMap {
                     id: paletteViewport; Layout.fillWidth: true; Layout.fillHeight: true
-                    columns: root.appState.width; rows: root.appState.height
-                    rasterSource: root.appState.rasterUrl; paletteSource: root.appState.paletteUrl
+                    columns: root.appState.paletteWidth || root.appState.width; rows: root.appState.paletteHeight || root.appState.height
+                    rasterSource: root.appState.paletteInputUrl || root.appState.rasterUrl; paletteSource: root.appState.paletteUrl
                     evidenceSource: root.appState.qualityEvidenceUrl; showEvidence: evidenceVisible.checked
                     picking: paletteDialog.picking
+                    framing:paletteDialog.framing
+                    onFrameSelected:function(x0,y0,x1,y1){backend.setSheetFrame(x0,y0,x1,y1);paletteDialog.framing=false;paletteDialog.close()}
                     onSampled: function(x,y) {
+                        if(paletteDialog.linePicking){backend.sampleLineColour(x,y,paletteDialog.linePicking);paletteDialog.linePicking=0;paletteDialog.picking=false;return}
                         var ident=backend.samplePalette(x,y)
                         if (ident) { paletteDialog.focused=ident; paletteDialog.colourPreview=true; paletteDialog.picking=false }
                     }
@@ -665,7 +703,7 @@ ApplicationWindow {
             }
         }
     }
-    Connections { target: backend; function onPalettePrepared() { paletteDialog.open() } }
+    Connections { target: backend; function onPalettePrepared() { paletteDialog.open();if(root.lineColourPending){paletteDialog.linePicking=root.lineColourPending;paletteDialog.picking=true;root.lineColourPending=0} } }
     Dialog {
         id: mapSettings; objectName: "mapSettings"; title: "Настройки карт"; modal: true; anchors.centerIn: parent; width: 460
         standardButtons: Dialog.Close
@@ -793,8 +831,8 @@ ApplicationWindow {
         header: Label { text: helpDialog.title; padding: 18; bottomPadding: 12; font.pixelSize: 18; font.bold: true; color: "#252f3d" }
         footer: Item { implicitHeight: 50
             ActionButton { anchors.left: parent.left; anchors.leftMargin: 18; anchors.verticalCenter: parent.verticalCenter
-                text: "Полное руководство ↗"; description: "Открыть руководство GeoTrace 0.8 beta в браузере"
-                onClicked: Qt.openUrlExternally("https://github.com/TheJakSin/GeoTrace/blob/v0.8.0-beta.1/docs/USER_GUIDE.md") }
+                text: "Полное руководство ↗"; description: "Открыть руководство пользователя"
+                onClicked: root.workspaceMode?backend.openManual():Qt.openUrlExternally("https://github.com/TheJakSin/GeoTrace/blob/main/docs/USER_GUIDE.md") }
             ActionButton { id: helpCloseButton; anchors.right: parent.right; anchors.rightMargin: 18; anchors.verticalCenter: parent.verticalCenter
                 text: "Закрыть"; description: "Закрыть справку"; shortcutLabel: "Esc"; onClicked: helpDialog.close() }
         }
@@ -814,6 +852,7 @@ ApplicationWindow {
                 Label { text: "Esc / Backspace"; font.bold: true } Label { text: "Сбросить линию или выбор / убрать точку" }
                 Label { text: root.commandKey+"+O / S / Shift+S"; font.bold: true } Label { text: "Открыть / сохранить / сохранить как" }
                 Label { text: root.commandKey+"+Z / Shift+Z"; font.bold: true } Label { text: "Отменить / повторить" }
+                Label {visible:root.workspaceMode;text:root.commandKey+"+K";font.bold:true} Label {visible:root.workspaceMode;text:"Найти действие или окно проекта"}
                 Label { text: root.commandKey+"+Enter"; font.bold: true } Label { text: "Применить поля в открытых атрибутах" }
                 Label { text: "F1"; font.bold: true } Label { text: "Открыть эту справку" }
             }
@@ -843,9 +882,9 @@ ApplicationWindow {
     Shortcut { autoRepeat: true; sequences: ["+", "="]; enabled: root.mapKeysEnabled; onActivated: viewport.zoomAtCenter(1.3) }
     Shortcut { autoRepeat: true; sequences: ["-"]; enabled: root.mapKeysEnabled; onActivated: viewport.zoomAtCenter(1/1.3) }
     Shortcut { autoRepeat: false; sequences: ["Escape"]; enabled: root.mapKeysEnabled; onActivated: root.escapeMap() }
-    Shortcut { autoRepeat: false; sequences: ["Backspace"]; enabled: root.mapKeysEnabled && root.appState.editPoints.length>0; onActivated: backend.removeEditPoint() }
+    Shortcut { autoRepeat: false; sequences: ["Backspace"]; enabled: root.mapKeysEnabled && (root.lineEditing || root.appState.editPoints.length>0); onActivated: {if(root.lineEditing)backend.removeLinePoint();else backend.removeEditPoint()} }
     Shortcut { autoRepeat: false; sequences: ["Return","Enter"]; enabled: root.mapKeysEnabled && (root.appState.autoReady || !root.viewing) && !root.originalOnly; onActivated: root.finishEdit() }
-    Shortcut { autoRepeat: false; sequences: ["Ctrl+Return", "Ctrl+Enter"]; enabled: root.attributesShown && attributesPanel.scopeData.count>0 && !root.appState.busy && !root.autosavePaused && !polygonDialog.visible && workspaceTabs.currentIndex===0; onActivated: applyAttributesButton.clicked() }
+    Shortcut { autoRepeat: false; sequences: ["Ctrl+Return", "Ctrl+Enter"]; enabled: !root.appState.lineMode && root.attributesShown && attributesPanel.scopeData.count>0 && !root.appState.busy && !root.autosavePaused && !polygonDialog.visible && workspaceTabs.currentIndex===0; onActivated: applyAttributesButton.clicked() }
     Shortcut { autoRepeat: false; sequences: [StandardKey.Open]; enabled: !root.autosavePaused && !polygonDialog.visible; onActivated: root.request("open") }
     Shortcut { autoRepeat: false; sequences: [StandardKey.Undo]; enabled: !root.autosavePaused && !backend.isTextInput(root.activeFocusItem) && !root.appState.busy; onActivated: backend.undo() }
     Shortcut { autoRepeat: false; sequences: [StandardKey.Redo]; enabled: !root.autosavePaused && !backend.isTextInput(root.activeFocusItem) && !root.appState.busy; onActivated: backend.redo() }
@@ -859,6 +898,7 @@ ApplicationWindow {
             RowLayout {
                 id: headerLeft; anchors.left: parent.left; anchors.leftMargin: 14; anchors.verticalCenter: parent.verticalCenter; spacing: 16
                 Label { text: "GeoTrace"; color: "#252b34"; font.pixelSize: 20; font.bold: true }
+                Label { visible:root.workspaceMode;text:backend.releaseLabel.split(" · ")[0];color:"#7b8593";font.pixelSize:10 }
                 TabBar {
                     id: workspaceTabs; objectName: "workspaceTabs"; Layout.preferredWidth: 205; Layout.preferredHeight: 32; clip: true
                     background: Item {}
@@ -897,10 +937,19 @@ ApplicationWindow {
                 ActionButton { text: "Проект ▾"; objectName: "projectMenuButton"; onClicked: projectMenu.popup()
                     Menu { id: projectMenu
                         MenuItem { text: "Сохранить как…"; ToolTip.visible: hovered; ToolTip.delay: 550; ToolTip.text: "Сохранить отдельную копию · "+root.commandKey+"+Shift+S"; enabled: !!root.appState.rasterUrl && !root.appState.busy; onTriggered: projectSaveDialog.open() }
-                        MenuItem { text: "Экспорт GeoPackage…"; enabled: root.appState.count>0 && !root.appState.busy; onTriggered: saveDialog.open() }
+                        MenuItem { text: "Экспорт GeoPackage…"; enabled: (root.appState.count>0||(root.appState.lineCount||0)>0) && !root.appState.busy; onTriggered: saveDialog.open() }
                         MenuSeparator {}
-                        MenuItem { text: "Поля атрибутов…"; enabled: !!root.appState.rasterUrl && !root.appState.busy; onTriggered: schemaManager.open() }
+                        MenuItem { text: root.appState.lineMode?"Поля линий…":"Поля атрибутов…"; enabled: !!root.appState.rasterUrl && !root.appState.busy; onTriggered: {if(root.appState.lineMode)root.openWorkspacePanel("lineAttributes");else schemaManager.open()} }
                         MenuItem { objectName: "openMapSettings"; text: "Настройки карт…"; onTriggered: mapSettings.open() }
+                        MenuSeparator {visible:root.workspaceMode}
+                        MenuItem {visible:root.workspaceMode;text:"Сопоставить группы листов…";onTriggered:root.openWorkspacePanel("groups")}
+                        MenuItem {visible:root.workspaceMode;text:"Оформление полигонов…";onTriggered:root.openWorkspacePanel("styles")}
+                        MenuItem {visible:root.workspaceMode;text:"Линии и разломы…";onTriggered:root.openWorkspacePanel("lines")}
+                        MenuItem {visible:root.workspaceMode;text:"Сводка участка…";onTriggered:root.openWorkspacePanel("summary")}
+                        MenuItem {visible:root.workspaceMode;text:"Макет и экспорт карты…";enabled:!!root.appState.rasterUrl&&!root.appState.busy;onTriggered:root.openWorkspacePanel("layout")}
+                        MenuItem {visible:root.workspaceMode;text:"Контрольные сохранения…";onTriggered:root.openWorkspacePanel("checkpoints")}
+                        MenuItem {visible:root.workspaceMode;text:"Сохранить с исходниками…";enabled:!!root.appState.rasterUrl;onTriggered:workspaceOverlay.item.savePortable()}
+                        MenuItem {visible:root.workspaceMode;text:"О программе…";onTriggered:root.openWorkspacePanel("about")}
                     }
                 }
                 ActionButton { text: "?"; objectName: "helpButton"; description: "Краткая справка"; shortcutLabel: "F1"; onClicked: helpDialog.open() }
@@ -918,14 +967,14 @@ ApplicationWindow {
                     Repeater { model: ["↖", "⌁", "↔", "╱", "⬡", "⋮"]
                         delegate: MapTool { required property int index; required property string modelData
                             iconName: ["cursor","lasso","boundary","split","polygon","vertices"][index]
-                            objectName: "toolButton_"+index; width: 34; height: 34; implicitHeight: 34; leftPadding: 0; rightPadding: 0; text: modelData
-                            Accessible.name: ["Выбрать полигоны", "Лассо", "Изменить границу", "Разделить полигон", "Создать полигон", "Изменить вершины"][index]
+                            objectName: "toolButton_"+index;visible:!root.appState.lineMode; width: 34; height: 34; implicitHeight: 34; leftPadding: 0; rightPadding: 0; text: modelData
+                            Accessible.name: root.lineEditing ? ["Выбрать линию","Выбрать линию","Переместить линию","Разделить линию","Создать линию","Изменить вершину линии"][index] : ["Выбрать полигоны", "Лассо", "Изменить границу", "Разделить полигон", "Создать полигон", "Изменить вершины"][index]
                             description: ["Щёлкайте по полигонам для выбора","Выберите полигоны обводкой","Перетяните общую границу","Нарисуйте линию разделения","Обведите новый полигон","Переместите вершину"][index]; shortcutLabel: ["V","L","B","C","P","N"][index]
                             highlighted: !root.viewing && modeTabs.currentIndex===2 && editTool.currentIndex===[0,0,5,1,3,4][index] && (index>1 || lassoToggle.checked===(index===1))
                             enabled: !root.appState.busy && !!root.appState.rasterUrl; onClicked: root.chooseTool([0,0,5,1,3,4][index],index===1)
                         }
                     }
-                    ActionButton { text: "⋯"; description: "Дополнительные инструменты"; objectName: "moreEditTools"; width: 34; leftPadding: 0; rightPadding: 0; onClicked: advancedTools.popup()
+                    ActionButton { text: "⋯"; description: "Дополнительные инструменты"; objectName: "moreEditTools";visible:!root.appState.lineMode; width: 34; leftPadding: 0; rightPadding: 0; onClicked: advancedTools.popup()
                         Menu { id: advancedTools
                             MenuItem { text: "Перерисовать общую границу"; ToolTip.visible: hovered; ToolTip.delay: 550; ToolTip.text: "Заменить границу двух соседей нарисованной линией"; onTriggered: root.chooseTool(2,false) }
                             MenuItem { text: "Уточнить область…"; onTriggered: promptOptions.open() }
@@ -967,6 +1016,17 @@ ApplicationWindow {
 
                         ColumnLayout { visible: true; Layout.fillWidth: true; spacing: 8
                         Rectangle { Layout.fillWidth: true; height: 1; color: "#dce0e6" }
+                        ColumnLayout {visible:root.workspaceMode;Layout.fillWidth:true
+                            Label {text:"ЛИСТЫ";color:"#687383";font.pixelSize:10}
+                            Repeater {model:root.appState.sheets||[]
+                                delegate:CheckBox {required property var modelData;Layout.fillWidth:true;implicitHeight:30;text:modelData.name;checked:modelData.visible;enabled:!root.appState.busy
+                                    contentItem:Label {text:parent.text;leftPadding:parent.indicator.width+6;verticalAlignment:Text.AlignVCenter;elide:Text.ElideRight;color:"#303944"}
+                                    onClicked:backend.setSheetVisible(modelData.id,checked)}}
+                            ActionButton {text:"Управление листами…";Layout.fillWidth:true;onClicked:root.openWorkspacePanel("sheets")}
+                            CheckBox {text:"Линии · "+(root.appState.lineCount||0);checked:root.appState.lineVisible!==false;onClicked:backend.setWorkspaceLayer("lineVisible",checked)}
+                            CheckBox {text:"Заблокировать линии";checked:root.appState.lineLocked===true;onClicked:backend.setWorkspaceLayer("lineLocked",checked)}
+                            CheckBox {text:"Заблокировать полигоны";checked:root.appState.polygonsLocked===true;onClicked:backend.setWorkspaceLayer("polygonsLocked",checked)}
+                        }
                         Label { text: "ВИДИМОСТЬ И ПРОЗРАЧНОСТЬ"; color: "#687383"; font.pixelSize: 10; font.letterSpacing: 1.5 }
                         RowLayout { Layout.fillWidth: true
                         CheckBox { implicitHeight: 30;
@@ -1088,18 +1148,45 @@ ApplicationWindow {
             ColumnLayout {
                 Layout.fillWidth: true; Layout.fillHeight: true; spacing: 0
                 Flow { Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 4; padding: 4
-                    ActionButton { text: "Оцифровать"; description: "Подготовить автоматическую оцифровку"; shortcutLabel: "D"; objectName: "autoPreviewButton"; enabled: !!root.appState.rasterUrl && !root.appState.busy
+                    ActionButton {visible:root.workspaceMode;text:"Листы";objectName:"workspaceSheetsButton";enabled:!root.appState.busy;onClicked:root.openWorkspacePanel("sheets")}
+                    ComboBox {visible:root.workspaceMode;implicitWidth:115;implicitHeight:30;model:["Полигоны","Линии"];currentIndex:root.appState.lineMode?1:0;enabled:!!root.appState.rasterUrl&&!root.appState.busy
+                        onActivated:{backend.setLineMode(currentIndex===1);root.viewing=true;if(currentIndex===1&&!(root.appState.lineTypes||[]).length)root.openWorkspacePanel("lines")}}
+                    ActionButton {visible:!root.appState.lineMode; text: "Оцифровать"; description: "Подготовить автоматическую оцифровку"; shortcutLabel: "D"; objectName: "autoPreviewButton"; enabled: !!root.appState.rasterUrl && !root.appState.busy
                         onClicked: {modeTabs.currentIndex=0; root.request("run")} }
-                    ActionButton { text: "Палитра"; objectName: "openPaletteButton"; shortcutLabel: "K"; description: "Подготовить группы цветов"; enabled: root.appState.qualityReady && !root.appState.busy; onClicked: paletteDialog.open() }
-                    ActionButton { text: "Проверка · "+root.appState.reviewCount; objectName: "reviewToggle"; shortcutLabel: "R"; description: "Открыть / закрыть проверку"; highlighted: root.reviewOpen; enabled: root.appState.reviewCount>0
+                    ActionButton {visible:!root.appState.lineMode; text: "Палитра"; objectName: "openPaletteButton"; shortcutLabel: "K"; description: "Подготовить группы цветов"; enabled: root.appState.qualityReady && !root.appState.busy; onClicked: paletteDialog.open() }
+                    ActionButton {visible:!root.appState.lineMode; text: "Проверка · "+root.appState.reviewCount; objectName: "reviewToggle"; shortcutLabel: "R"; description: "Открыть / закрыть проверку"; highlighted: root.reviewOpen; enabled: root.appState.reviewCount>0
                         onClicked: root.reviewOpen=!root.reviewOpen }
                     ActionButton { id: compareButton; objectName: "compareOriginalButton"; text: root.originalOnly ? "Исходник" : "Результат"; highlighted: root.originalOnly; enabled: !!root.appState.rasterUrl
                         onClicked: root.originalOnly=!root.originalOnly; description: "Исходник / результат"; shortcutLabel: "Shift" }
-                    ActionButton { text: "Таблица"; objectName: "openTableButton"; shortcutLabel: "T"; description: "Открыть таблицу полигонов"; enabled: root.appState.count>0 && !root.appState.busy; onClicked: polygonDialog.open() }
+                    ActionButton {visible:!root.appState.lineMode; text: "Таблица"; objectName: "openTableButton"; shortcutLabel: "T"; description: "Открыть таблицу полигонов"; enabled: root.appState.count>0 && !root.appState.busy; onClicked: polygonDialog.open() }
                     ActionButton { text: "Атрибуты"; objectName: "attributesToggle"; shortcutLabel: "A"; description: "Показать / скрыть атрибуты"; highlighted: root.attributesPinned; onClicked: root.attributesPinned=!root.attributesPinned }
                     ActionButton { text: "−"; objectName: "zoomOutButton"; description: "Уменьшить карту"; shortcutLabel: "−"; onClicked: viewport.zoomAtCenter(1/1.3) }
                     ActionButton { text: "Вписать"; objectName: "fitMapButton"; description: "Показать всю карту"; shortcutLabel: "F"; onClicked: viewport.fit() }
                     ActionButton { text: "+"; objectName: "zoomInButton"; description: "Увеличить карту"; shortcutLabel: "+"; onClicked: viewport.zoomAtCenter(1.3) }
+                }
+                RowLayout {visible:root.workspaceMode&&root.appState.lineMode;Layout.fillWidth:true;spacing:4
+                    Repeater {model:[{text:"Выбрать",tool:"select"},{text:"Рисовать",tool:"draw"},{text:"Тянуть",tool:"drag"},{text:"Вершина",tool:"vertex"},{text:"Разделить",tool:"split"}]
+                        delegate:ActionButton {required property var modelData;text:modelData.text;highlighted:root.appState.lineTool===modelData.tool;enabled:!root.appState.busy
+                            onClicked:{if(modelData.tool==="draw"&&!(root.appState.lineTypes||[]).length){root.openWorkspacePanel("lines");return}backend.setLineTool(modelData.tool);root.viewing=false;viewport.forceActiveFocus()}}}
+                    ActionButton {text:"Завершить";description:"Закончить рисование линии";shortcutLabel:"Enter";enabled:(root.appState.lineDraft||[]).length>1&&!root.appState.busy;onClicked:backend.finishLine()}
+                    ActionButton {text:"Продолжить";enabled:(root.appState.lineSelected||[]).length===1&&!root.appState.busy;onClicked:{backend.continueLine();root.viewing=false}}
+                    ActionButton {text:"Атрибуты";objectName:"linePropertiesAction";shortcutLabel:"A";enabled:(root.appState.lineSelected||[]).length>0;onClicked:root.openWorkspacePanel("lineAttributes")}
+                    ActionButton {text:"Типы и цвет…";onClicked:root.openWorkspacePanel("lines")}
+                    ActionButton {text:"Действия ▾";enabled:!root.appState.busy;onClicked:lineActions.popup()
+                        Menu {id:lineActions
+                            MenuItem {text:"Соединить выбранные линии";enabled:(root.appState.lineSelected||[]).length>1;onTriggered:backend.joinSelectedLines()}
+                            MenuItem {text:"Удалить выбранные линии";enabled:(root.appState.lineSelected||[]).length>0;onTriggered:backend.deleteSelectedLines()}
+                            MenuSeparator {}
+                            MenuItem {text:"Продолжить с другого конца";enabled:(root.appState.lineDraft||[]).length===1;onTriggered:backend.reverseContinuation()}
+                            MenuItem {text:"Добавить вершину на линии";onTriggered:{backend.setLineTool("insert");root.viewing=false}}
+                            MenuItem {text:"Удалить ближайшую вершину";onTriggered:{backend.setLineTool("remove_vertex");root.viewing=false}}
+                        }}
+                    Item {Layout.fillWidth:true}
+                }
+                RowLayout {visible:root.workspaceMode&&(root.appState.linePreviewCount||0)>0;Layout.fillWidth:true
+                    Label {text:"Бета-предложения линий: "+(root.appState.linePreviewCount||0);leftPadding:8}
+                    ActionButton {text:"Применить линии";enabled:!root.appState.busy;onClicked:backend.acceptLines()}
+                    ActionButton {text:"Закрыть";enabled:!root.appState.busy;onClicked:backend.discardLines()}
                 }
 
                 Rectangle {
@@ -1180,13 +1267,13 @@ ApplicationWindow {
                         TapHandler { onTapped: Qt.openUrlExternally("https://yandex.ru/maps/") }
                     }
                     Connections { target: backend; function onBasemapConfigurationChanged() { basemapTimer.restart() } }
-                    clip: true; boundsBehavior: Flickable.StopAtBounds
+                    clip: true; boundsBehavior: Flickable.StopAtBounds;interactive:!root.workspaceMode
                     property real zoom: 1
                     // Camera offsets change only on an explicit fit, never when
                     // an inspector, review bar or contextual action appears.
                     property real frameX: 0
                     property real frameY: 0
-                    readonly property real usableWidth: Math.max(1,width-(root.attributesShown ? attributesPanel.width+8 : 0)-(root.sidebarOpen ? toolsSidebar.width+4 : 0))
+                    readonly property real usableWidth: Math.max(1,width-(root.attributesShown ? (root.appState.lineMode?340:attributesPanel.width)+8 : 0)-(root.sidebarOpen ? toolsSidebar.width+4 : 0))
                     readonly property real paddingX: root.appState.layerSettings.basemap_visible ? Math.ceil(root.appState.width*root.appState.basemapMargin) : 0
                     readonly property real paddingY: root.appState.layerSettings.basemap_visible ? Math.ceil(root.appState.height*root.appState.basemapMargin) : 0
                     property real previousPaddingX: 0
@@ -1195,8 +1282,7 @@ ApplicationWindow {
                     onPaddingYChanged: Qt.callLater(updateContext)
                     function updateContext() {
                         if (!root.appState.width || !root.appState.height) return
-                        var oldFit = Math.min((width-40)/(root.appState.width+2*previousPaddingX), (height-40)/(root.appState.height+2*previousPaddingY))
-                        var fitted = Math.abs(zoom-oldFit) < .001
+                        var fitted = fitMode
                         var dx = (paddingX-previousPaddingX)*zoom
                         var dy = (paddingY-previousPaddingY)*zoom
                         previousPaddingX = paddingX; previousPaddingY = paddingY
@@ -1211,41 +1297,77 @@ ApplicationWindow {
                     property bool fitMode: false
                     property bool fitting: false
                     onZoomChanged: { if(!fitting)fitMode=false;basemapTimer.restart() }
-                    onContentXChanged: basemapTimer.restart()
-                    onContentYChanged: basemapTimer.restart()
+                    onContentXChanged: {if(!fitting)fitMode=false;basemapTimer.restart()}
+                    onContentYChanged: {if(!fitting)fitMode=false;basemapTimer.restart()}
                     onWidthChanged: basemapTimer.restart()
                     onHeightChanged: basemapTimer.restart()
                     Timer {
                         id: basemapTimer; interval: 400
                         onTriggered: {
-                            if (!root.appState.layerSettings.basemap_visible || !root.appState.rasterUrl) return
+                            if (!root.appState.rasterUrl) return
                             var left = (viewport.contentX - rasterCanvas.x) / viewport.zoom
                             var top = (viewport.contentY - rasterCanvas.y) / viewport.zoom
                             var x = Math.max(-viewport.paddingX, left)
                             var y = Math.max(-viewport.paddingY, top)
                             var w = Math.max(0, Math.min(root.appState.width+viewport.paddingX, left+viewport.width/viewport.zoom)-x)
                             var h = Math.max(0, Math.min(root.appState.height+viewport.paddingY, top+viewport.height/viewport.zoom)-y)
+                            if(root.workspaceMode)backend.rememberMapView(x,y,w,h)
+                            if(root.workspaceMode){var ratio=Screen.devicePixelRatio||1;backend.requestDetail(x,y,w,h,Math.ceil(w*viewport.zoom*ratio),Math.ceil(h*viewport.zoom*ratio))}
+                            if(!root.appState.layerSettings.basemap_visible)return
                             var dpr = Screen.devicePixelRatio || 1
                             backend.requestBasemap(x, y, w, h, Math.ceil(w*viewport.zoom*dpr), Math.ceil(h*viewport.zoom*dpr))
                         }
                     }
                     contentWidth: Math.max(width, (root.appState.width+2*paddingX) * zoom+frameX+20)
                     contentHeight: Math.max(height, (root.appState.height+2*paddingY) * zoom+frameY+20)
-                    function zoomAtCenter(factor) {
-                        var px=(contentX+width/2-rasterCanvas.x)/zoom
-                        var py=(contentY+height/2-rasterCanvas.y)/zoom
-                        zoom=Math.max(.1,Math.min(12,zoom*factor))
-                        contentX=Math.max(0,Math.min(contentWidth-width,rasterCanvas.x+px*zoom-width/2))
-                        contentY=Math.max(0,Math.min(contentHeight-height,rasterCanvas.y+py*zoom-height/2))
+                    property point freePanOrigin
+                    property real freePanX:0
+                    property real freePanY:0
+                    function beginFreePan(point){
+                        freePanOrigin=point;freePanX=frameX-contentX;freePanY=frameY-contentY
+                        frameX=freePanX;frameY=freePanY;contentX=0;contentY=0;fitMode=false
+                    }
+                    function moveFreePan(point){frameX=freePanX+point.x-freePanOrigin.x;frameY=freePanY+point.y-freePanOrigin.y;basemapTimer.restart()}
+                    function scrollFreePan(dx,dy){frameX=frameX-contentX+dx;frameY=frameY-contentY+dy;contentX=0;contentY=0;fitMode=false;basemapTimer.restart()}
+                    function zoomAtCenter(factor){zoomAtPoint(factor,width/2,height/2)}
+                    function zoomAtPoint(factor,sx,sy){
+                        var px=(contentX+sx-rasterCanvas.x)/zoom,py=(contentY+sy-rasterCanvas.y)/zoom
+                        zoom=Math.max(.015,Math.min(24,zoom*factor))
+                        if(root.workspaceMode){
+                            frameX=sx-(px+paddingX)*zoom;frameY=sy-(py+paddingY)*zoom;contentX=0;contentY=0
+                        }else{
+                            contentX=Math.max(0,Math.min(contentWidth-width,rasterCanvas.x+px*zoom-sx))
+                            contentY=Math.max(0,Math.min(contentHeight-height,rasterCanvas.y+py*zoom-sy))
+                        }
+                    }
+                    function handleWheel(wheel,point){
+                        if((wheel.pixelDelta.x||wheel.pixelDelta.y)&&!(wheel.modifiers&Qt.ControlModifier)){
+                            if(root.workspaceMode)scrollFreePan(wheel.pixelDelta.x,wheel.pixelDelta.y)
+                            else{contentX-=wheel.pixelDelta.x;contentY-=wheel.pixelDelta.y}
+                        }else{
+                            var amount=wheel.pixelDelta.y?wheel.pixelDelta.y/120:wheel.angleDelta.y/120
+                            zoomAtPoint(Math.pow(1.15,amount),point.x,point.y)
+                        }
+                        wheel.accepted=true
+                    }
+                    PinchHandler {objectName:"mapPinch";parent:viewport;target:null;acceptedDevices:PointerDevice.TouchPad|PointerDevice.TouchScreen
+                        property real previousScale:1
+                        onActiveChanged:previousScale=1
+                        onActiveScaleChanged:{if(active){var point=viewport.mapFromItem(null,centroid.scenePosition.x,centroid.scenePosition.y);viewport.zoomAtPoint(activeScale/previousScale,point.x,point.y);previousScale=activeScale}}
                     }
                     function fit() {
                         if (!root.appState.width || !root.appState.height) return
                         fitting=true
                         // Leave room for a single floating action row even in
                         // View, so its appearance cannot cover the top edge.
-                        zoom = Math.max(.01, Math.min((usableWidth - 40) / (root.appState.width+2*paddingX), (height - 64) / (root.appState.height+2*paddingY)))
-                        frameX=(root.sidebarOpen ? toolsSidebar.width+4 : 0)+Math.max(0,(usableWidth-(root.appState.width+2*paddingX)*zoom)/2)
-                        frameY=44+Math.max(0,(height-64-(root.appState.height+2*paddingY)*zoom)/2)
+                        var b=root.appState.fitBounds||[]
+                        if(b.length!==4)b=[0,0,root.appState.width,root.appState.height]
+                        var rw=Math.max(1,b[2]-b[0]),rh=Math.max(1,b[3]-b[1])
+                        var px=root.appState.layerSettings.basemap_visible?rw*root.appState.basemapMargin:0
+                        var py=root.appState.layerSettings.basemap_visible?rh*root.appState.basemapMargin:0
+                        zoom = Math.max(.01, Math.min((usableWidth - 40) / (rw+2*px), (height - 64) / (rh+2*py)))
+                        frameX=(root.sidebarOpen ? toolsSidebar.width+4 : 0)+Math.max(0,(usableWidth-(rw+2*px)*zoom)/2)-(b[0]-px+paddingX)*zoom
+                        frameY=44+Math.max(0,(height-64-(rh+2*py)*zoom)/2)-(b[1]-py+paddingY)*zoom
                         contentX = 0; contentY = 0
                         fitMode=true;fitting=false
                     }
@@ -1267,9 +1389,40 @@ ApplicationWindow {
                             cache: false; smooth: true
                         }
                         Image { objectName: "rasterImage"; anchors.fill: parent; source: root.appState.areaDraftRasterUrl || root.appState.rasterUrl; visible: root.originalOnly || rasterVisible.checked || !!root.appState.areaDraftRasterUrl; opacity: root.originalOnly ? 1 : rasterOpacity.value; cache: false; smooth: false }
+                        Image {objectName:"detailImage";readonly property var region:root.appState.detailRect||({})
+                            x:(region.x||0)*viewport.zoom;y:(region.y||0)*viewport.zoom;width:(region.w||0)*viewport.zoom;height:(region.h||0)*viewport.zoom
+                            source:root.appState.detailUrl||"";visible:root.workspaceMode&&!root.appState.areaDraftRasterUrl&&(root.originalOnly||rasterVisible.checked);opacity:root.originalOnly?1:rasterOpacity.value;cache:false;smooth:true}
                         Image { objectName: "polygonOverlay"; anchors.fill: parent; source: parent.showingAuto ? root.appState.autoPreviewUrl : modeTabs.currentIndex === 2 && root.appState.geometryReady ? root.appState.editPreviewUrl : root.appState.overlayUrl; visible: !root.originalOnly && !root.appState.areaDraftRasterUrl && (mapMouse.direct || overlayVisible.checked || (modeTabs.currentIndex === 2 && root.appState.geometryReady)); opacity: mapMouse.direct ? Math.max(.4,opacitySlider.value) : opacitySlider.value; cache: false; smooth: false }
                         Image { anchors.fill: parent; source: modeTabs.currentIndex === 2 && root.appState.geometryReady ? root.appState.editSelectionUrl : root.appState.selectionUrl; visible: !root.originalOnly && !parent.showingAuto && !root.appState.areaDraftRasterUrl; cache: false; smooth: false }
                         Image { anchors.fill: parent; source: root.appState.hintUrl; visible: !root.originalOnly && modeTabs.currentIndex !== 2 && !parent.showingAuto && !root.appState.areaDraftRasterUrl; cache: false; smooth: false }
+                        Image {anchors.fill:parent;source:root.appState.linesUrl||"";visible:root.workspaceMode&&!root.originalOnly&&root.appState.lineVisible!==false;cache:false;smooth:true}
+                        Image {anchors.fill:parent;source:root.appState.linePreviewUrl||"";visible:root.workspaceMode&&!root.originalOnly;cache:false;smooth:true}
+
+                        Image {anchors.fill:parent;source:root.appState.matchingUrl||"";visible:root.appState.groupMatching===true&&root.matchingHighlight&&!root.originalOnly;cache:false;smooth:false}
+                        Repeater {model:root.workspaceMode&&!root.originalOnly?(root.appState.detailLabels||[]):[]
+                            delegate:Label {required property var modelData;x:modelData.x*viewport.zoom;y:modelData.y*viewport.zoom-14;text:modelData.text;color:modelData.color;font.pixelSize:12
+                                style:Text.Outline;styleColor:"white"}}
+                        Canvas {id:lineDraftCanvas;visible:root.workspaceMode && (root.lineEditing || root.layoutFrameMode)
+                            x:Math.max(0,viewport.contentX-rasterCanvas.x);y:Math.max(0,viewport.contentY-rasterCanvas.y)
+                            width:Math.max(1,Math.min(viewport.width,rasterCanvas.width-x));height:Math.max(1,Math.min(viewport.height,rasterCanvas.height-y))
+                            onXChanged:requestPaint();onYChanged:requestPaint();onWidthChanged:requestPaint();onHeightChanged:requestPaint()
+                            onPaint:{var ctx=getContext("2d");ctx.clearRect(0,0,width,height);ctx.save();ctx.translate(-lineDraftCanvas.x,-lineDraftCanvas.y);var pts=mapMouse.lineDragging?(root.appState.lineDragPreview||[]):(root.appState.lineDraft||[])
+                                function strokePath(points,selection){
+                                    if(!points.length)return
+                                    ctx.beginPath();ctx.moveTo(points[0].x*viewport.zoom,points[0].y*viewport.zoom)
+                                    for(var i=1;i<points.length;i++)ctx.lineTo(points[i].x*viewport.zoom,points[i].y*viewport.zoom)
+                                    ctx.lineJoin="round";ctx.lineCap="round"
+                                    if(selection){ctx.strokeStyle="white";ctx.lineWidth=5;ctx.stroke()}
+                                    ctx.strokeStyle="#356ac3";ctx.lineWidth=2;ctx.stroke()
+                                }
+                                if(!mapMouse.lineDragging)(root.appState.lineSelectionPaths||[]).forEach(function(path){strokePath(path,true)})
+                                strokePath(pts,mapMouse.lineDragging)
+                                if(mapMouse.frameDragging){ctx.strokeStyle="#356ac3";ctx.fillStyle="#22356ac3";var x=mapMouse.frameStart.x*viewport.zoom,y=mapMouse.frameStart.y*viewport.zoom,w=(mapMouse.frameEnd.x-mapMouse.frameStart.x)*viewport.zoom,h=(mapMouse.frameEnd.y-mapMouse.frameStart.y)*viewport.zoom;ctx.fillRect(x,y,w,h);ctx.strokeRect(x,y,w,h)}
+                                ctx.restore()
+                            }
+                            Connections {target:backend;function onChanged(){lineDraftCanvas.requestPaint()}}
+                            Connections {target:viewport;function onZoomChanged(){lineDraftCanvas.requestPaint()}}
+                        }
                         Image {
                             objectName: "reviewHighlight"
                             readonly property var mark: root.appState.reviewMarker
@@ -1347,11 +1500,16 @@ ApplicationWindow {
                             id: mapMouse; objectName: "mapMouse"
                             anchors.fill: parent
                             acceptedButtons: Qt.LeftButton | Qt.MiddleButton
-                            readonly property bool lassoMode: !root.viewing && !root.originalOnly && modeTabs.currentIndex===2 && editTool.currentIndex===0 && lassoToggle.checked && !parent.showingAuto
+                            readonly property bool lassoMode: !root.lineEditing && !root.layoutFrameMode && !root.viewing && !root.originalOnly && modeTabs.currentIndex===2 && editTool.currentIndex===0 && lassoToggle.checked && !parent.showingAuto
                             property bool lassoDragging: false
                             property var lassoPoints: []
                             property bool lassoAdditive: false
+                            property bool lineDragging: false
+                            property bool frameDragging: false
+                            property point frameStart
+                            property point frameEnd
                             property bool panning: false
+                            property bool panMoved:false
                             property var panOrigin: ({})
                             property real panContentX: 0
                             property real panContentY: 0
@@ -1361,7 +1519,7 @@ ApplicationWindow {
                             property real dragY: 0
                             property real pressX: 0
                             property real pressY: 0
-                            readonly property bool direct: !root.viewing && !root.originalOnly && modeTabs.currentIndex===2 && editTool.currentIndex===5
+                            readonly property bool direct: !root.lineEditing && !root.layoutFrameMode && !root.appState.polygonsLocked && !root.viewing && !root.originalOnly && modeTabs.currentIndex===2 && editTool.currentIndex===5
                             property var edgePath: []
                             readonly property bool edgeDragging: edgePath.length>0
                             property var snap: ({})
@@ -1373,9 +1531,20 @@ ApplicationWindow {
                             onExited: { snap={}; editCanvas.requestPaint() }
                             preventStealing: direct || vertexDragging || lassoMode || panning
                             onPressed: function(mouse) {
+                                panMoved=false
+                                if(root.workspaceMode&&(root.lineSampleType||root.appState.groupMatching===true||root.viewing||root.originalOnly||mouse.button===Qt.MiddleButton)){
+                                    panning=true;viewport.beginFreePan(mapToItem(viewport,mouse.x,mouse.y));return
+                                }
                                 if (mouse.button===Qt.MiddleButton) {
                                     panning=true;panOrigin=mapToItem(viewport,mouse.x,mouse.y)
                                     panContentX=viewport.contentX;panContentY=viewport.contentY;return
+                                }
+                                if(root.layoutFrameMode && mouse.button===Qt.LeftButton){frameDragging=true;frameStart=Qt.point(mouse.x/viewport.zoom,mouse.y/viewport.zoom);frameEnd=frameStart;lineDraftCanvas.requestPaint();return}
+                                if(root.lineEditing){
+                                    if(root.appState.lineTool==="drag" || root.appState.lineTool==="vertex"){
+                                        pressX=mouse.x;pressY=mouse.y;lineDragging=backend.beginLineDrag(mouse.x/viewport.zoom,mouse.y/viewport.zoom,8/viewport.zoom)
+                                    }
+                                    return
                                 }
                                 if(root.viewing || root.originalOnly){mouse.accepted=false;return}
                                 if (lassoMode) {
@@ -1397,8 +1566,11 @@ ApplicationWindow {
                                 }
                             }
                             onPositionChanged: function(mouse) {
+                                if(frameDragging){frameEnd=Qt.point(mouse.x/viewport.zoom,mouse.y/viewport.zoom);lineDraftCanvas.requestPaint();return}
+                                if(lineDragging){dragX=mouse.x;dragY=mouse.y;backend.previewLineDrag((dragX-pressX)/viewport.zoom,(dragY-pressY)/viewport.zoom);return}
                                 if (panning) {
                                     var current=mapToItem(viewport,mouse.x,mouse.y)
+                                    if(root.workspaceMode){if(Math.hypot(current.x-viewport.freePanOrigin.x,current.y-viewport.freePanOrigin.y)>3)panMoved=true;viewport.moveFreePan(current);return}
                                     viewport.contentX=Math.max(0,Math.min(Math.max(0,viewport.contentWidth-viewport.width),panContentX+panOrigin.x-current.x))
                                     viewport.contentY=Math.max(0,Math.min(Math.max(0,viewport.contentHeight-viewport.height),panContentY+panOrigin.y-current.y));return
                                 }
@@ -1418,7 +1590,10 @@ ApplicationWindow {
                                 if (edgeDragging || vertexDragging) { dragX=mouse.x; dragY=mouse.y; editCanvas.requestPaint() }
                             }
                             onReleased: function(mouse) {
+                                if(panning&&root.workspaceMode){panning=false;return}
                                 if (mouse.button===Qt.MiddleButton) { panning=false;return }
+                                if(frameDragging){frameDragging=false;root.layoutFrameMode=false;backend.setExportFrame(Math.min(frameStart.x,frameEnd.x),Math.min(frameStart.y,frameEnd.y),Math.max(frameStart.x,frameEnd.x),Math.max(frameStart.y,frameEnd.y));lineDraftCanvas.requestPaint();return}
+                                if(lineDragging){lineDragging=false;if(Math.hypot(mouse.x-pressX,mouse.y-pressY)>2)backend.finishLineDrag((mouse.x-pressX)/viewport.zoom,(mouse.y-pressY)/viewport.zoom);else backend.cancelLineDrag();return}
                                 if (lassoDragging) {
                                     if(lassoPoints.length>=3)backend.selectLasso(JSON.stringify(lassoPoints.concat([[mouse.x/viewport.zoom,mouse.y/viewport.zoom]])),lassoAdditive)
                                     else backend.selectForEdit(mouse.x/viewport.zoom,mouse.y/viewport.zoom)
@@ -1436,10 +1611,14 @@ ApplicationWindow {
                                     vertexDragging=false; editCanvas.requestPaint()
                                 }
                             }
-                            onCanceled: { panning=false;lassoDragging=false;lassoPoints=[];clearEdge(); vertexDragging=false; backend.cancelVertexDrag(); editCanvas.requestPaint() }
-                            cursorShape: panning ? Qt.ClosedHandCursor : root.viewing || root.originalOnly ? Qt.OpenHandCursor : lassoMode ? Qt.CrossCursor : (modeTabs.currentIndex === 1 && hintMode.currentIndex > 0) || (modeTabs.currentIndex === 2 && editTool.currentIndex > 0) ? Qt.CrossCursor : Qt.ArrowCursor
+                            onCanceled: { panning=false;if(lineDragging)backend.clearLineDraft();lineDragging=false;frameDragging=false;lassoDragging=false;lassoPoints=[];clearEdge(); vertexDragging=false; backend.cancelVertexDrag(); editCanvas.requestPaint() }
+                            cursorShape: (root.lineSampleType||root.appState.groupMatching===true)?Qt.CrossCursor:panning ? Qt.ClosedHandCursor : root.viewing || root.originalOnly ? Qt.OpenHandCursor : lassoMode ? Qt.CrossCursor : (modeTabs.currentIndex === 1 && hintMode.currentIndex > 0) || (modeTabs.currentIndex === 2 && editTool.currentIndex > 0) ? Qt.CrossCursor : Qt.ArrowCursor
                             onClicked: function(mouse) {
-                                if (root.viewing || root.originalOnly || mouse.button!==Qt.LeftButton || parent.showingAuto || direct || lassoMode) return
+                                if(panMoved){panMoved=false;return}
+                                if(root.lineSampleType&&mouse.button===Qt.LeftButton){if(backend.sampleWorkspaceLineColor(mouse.x/viewport.zoom,mouse.y/viewport.zoom,root.lineSampleType,root.lineSampleSourceOnly)){root.lineSampleType=0;root.originalOnly=root.lineSampleOriginal;root.openWorkspacePanel("lines")};return}
+                                if(root.appState.groupMatching===true&&mouse.button===Qt.LeftButton){backend.pickMatchingGroup(mouse.x/viewport.zoom,mouse.y/viewport.zoom);return}
+                                if(root.lineEditing){if(root.appState.lineTool!=="drag" && root.appState.lineTool!=="vertex")backend.lineClick(mouse.x/viewport.zoom,mouse.y/viewport.zoom,8/viewport.zoom,!!(mouse.modifiers&(Qt.ShiftModifier|Qt.ControlModifier|Qt.MetaModifier)));return}
+                                if (root.viewing || root.originalOnly || root.layoutFrameMode || mouse.button!==Qt.LeftButton || parent.showingAuto || direct || lassoMode) return
                                 var x = mouse.x / viewport.zoom; var y = mouse.y / viewport.zoom
                                 if (modeTabs.currentIndex === 2) {
                                     if (editTool.currentIndex === 0) backend.selectForEdit(x,y)
@@ -1450,16 +1629,8 @@ ApplicationWindow {
                                 else backend.selectAt(x,y)
                             }
                             onWheel: function(wheel) {
-                                if (vertexDragging || edgeDragging || lassoDragging) { wheel.accepted=true; return }
-                                var old = viewport.zoom
-                                var next = Math.max(0.1, Math.min(12, old * (wheel.angleDelta.y > 0 ? 1.15 : 1 / 1.15)))
-                                var px = wheel.x / old; var py = wheel.y / old
-                                var screenX = parent.x + wheel.x - viewport.contentX
-                                var screenY = parent.y + wheel.y - viewport.contentY
-                                viewport.zoom = next
-                                viewport.contentX = Math.max(0, Math.min(viewport.contentWidth - viewport.width, parent.x + px * next - screenX))
-                                viewport.contentY = Math.max(0, Math.min(viewport.contentHeight - viewport.height, parent.y + py * next - screenY))
-                                wheel.accepted = true
+                                if(vertexDragging||edgeDragging||lineDragging||lassoDragging){wheel.accepted=true;return}
+                                viewport.handleWheel(wheel,mapToItem(viewport,wheel.x,wheel.y))
                             }
                         }
                     }
@@ -1479,7 +1650,7 @@ ApplicationWindow {
                 }
             }
             Rectangle {
-                id: attributesPanel; objectName: "attributesPanel"; visible: root.attributesShown
+                id: attributesPanel; objectName: "attributesPanel"; visible: root.attributesShown&&!(root.workspaceMode&&root.appState.lineMode)
                 parent: viewport; anchors.right: parent.right; anchors.top: parent.top; z: 120
                 width: 292; height: Math.min(viewport.height,attributeControls.implicitHeight+attributesHeader.height+36); color: "#ffffff"; border.color: "#dce0e6"
                 MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: function(wheel){wheel.accepted=true} }
@@ -1549,6 +1720,8 @@ ApplicationWindow {
                             }
                         }
                     }
+                    Label {visible:root.workspaceMode && !!root.appState.selectionMeasurement;text:root.appState.selectionMeasurement||"";Layout.fillWidth:true;wrapMode:Text.WordWrap;color:"#566273";font.pixelSize:11}
+                    Label {visible:root.workspaceMode&&!!root.appState.selection.object_id;text:"Группа "+(root.appState.selection.class_id||0)+" · "+((root.appState.projectClasses||[])[(root.appState.selection.class_id||1)-1]||{}).name;Layout.fillWidth:true;wrapMode:Text.WordWrap;color:"#263445";font.bold:true;font.pixelSize:12}
                     ActionButton { id: applyAttributesButton; text: "Применить к "+attributesPanel.scopeData.count+" объектам"; shortcutLabel: root.commandKey+"+Enter"; objectName: "applyAttributesButton"; Layout.fillWidth: true; highlighted: true
                         enabled: attributesPanel.scopeData.count>0 && !root.appState.busy
                         onClicked: backend.applyAttributeScope(attributesPanel.scopeSpec,attributesPanel.patch(),scopeOnlyEmpty.checked && attributesPanel.scopeData.count>1,attributesPanel.scopeData.epoch) }
@@ -1582,4 +1755,45 @@ ApplicationWindow {
                 text: root.appState.autosaveStatus; color: "#687383"; font.pixelSize: 11 }
         }
     }
+    Shortcut {sequences:["Ctrl+K","Meta+K"];enabled:root.workspaceMode && !root.appState.busy;onActivated:root.openWorkspacePanel("search")}
+    Loader {id:workspaceOverlay;anchors.fill:parent;active:root.workspaceMode
+        sourceComponent:Component {WorkspacePanels {controller:backend;appRoot:root
+            onLineColourRequested:function(identity){
+                if(root.appState.qualityReady){paletteDialog.open();paletteDialog.linePicking=identity;paletteDialog.picking=true}
+                else{root.lineColourPending=identity;backend.prepareQuality()}
+            }
+            onMapFrameRequested:{root.layoutFrameMode=true;root.viewing=false;viewport.forceActiveFocus()}
+            onLineStyleColourRequested:function(identity,sourceOnly){root.lineSampleType=identity;root.lineSampleSourceOnly=sourceOnly;root.lineSampleOriginal=root.originalOnly;root.originalOnly=true;root.viewing=true;viewport.forceActiveFocus()}
+        }}
+    }
+    Connections {target:backend;ignoreUnknownSignals:true
+        function onDetailRefreshRequested(){basemapTimer.restart()}
+        function onExternalFileRequested(url){root.pendingExternalFile=url;root.request("external")}
+        function onHistoryRestored(){mapMouse.lineDragging=false;mapMouse.vertexDragging=false;mapMouse.frameDragging=false;mapMouse.clearEdge();editCanvas.requestPaint();lineDraftCanvas.requestPaint()}
+    }
+    MouseArea {parent:viewport;anchors.fill:parent;z:-1;enabled:root.workspaceMode&&!!root.appState.rasterUrl
+        acceptedButtons:Qt.LeftButton|Qt.MiddleButton;cursorShape:pressed?Qt.ClosedHandCursor:Qt.OpenHandCursor
+        onPressed:function(mouse){viewport.beginFreePan(mapToItem(viewport,mouse.x,mouse.y))}
+        onPositionChanged:function(mouse){if(pressed)viewport.moveFreePan(mapToItem(viewport,mouse.x,mouse.y))}
+        onWheel:function(wheel){viewport.handleWheel(wheel,mapToItem(viewport,wheel.x,wheel.y))}
+    }
+    Label {parent:viewport;anchors.top:parent.top;anchors.horizontalCenter:parent.horizontalCenter;anchors.topMargin:8;z:140;visible:root.lineSampleType>0
+        text:"Пипетка · укажите цвет на исходной карте · Esc — отмена";color:"#263445";padding:10;background:Rectangle {color:"white";border.color:"#cbd4e1";radius:4}}
+    Rectangle {parent:viewport;anchors.fill:parent;color:"#f3f5f8";visible:root.workspaceMode&&!root.appState.rasterUrl;z:80
+        ColumnLayout {anchors.centerIn:parent;width:Math.min(510,parent.width-60);spacing:14
+            Label {text:"GeoTrace";font.pixelSize:30;font.bold:true;color:"#252f3d"}
+            Label {text:"Проект участка";font.pixelSize:17;color:"#566273"}
+            Label {text:"Добавьте контур KML и листы карты. Подготовка цветов выполняется отдельно для каждого полного листа.";Layout.fillWidth:true;wrapMode:Text.WordWrap;color:"#687383"}
+            RowLayout {
+                ActionButton {text:"Добавить KML…";enabled:!root.appState.busy;onClicked:root.openWorkspacePanel("kml")}
+                ActionButton {text:"Добавить листы…";enabled:!root.appState.busy;highlighted:true;onClicked:root.openWorkspacePanel("add")}
+                ActionButton {text:"Открыть проект…";enabled:!root.appState.busy;onClicked:root.request("open")}
+            }
+            Label {text:root.appState.areaName||"";visible:!!text;color:"#356ac3";Layout.fillWidth:true;elide:Text.ElideRight}
+            Label {text:"Последние проекты";visible:(root.appState.recentProjects||[]).length>0;font.bold:true;topPadding:12}
+            Repeater {model:root.appState.recentProjects||[]
+                delegate:ActionButton {required property string modelData;text:decodeURIComponent(modelData.split("/").pop());Layout.fillWidth:true;enabled:!root.appState.busy;description:modelData;onClicked:backend.openRecent(modelData)}}
+        }
+    }
+
 }

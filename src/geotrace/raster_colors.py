@@ -89,7 +89,7 @@ def _expand_palette(source):
         raise
 
 
-def _palette_rgb(source, width, height):
+def _palette_rgb(source, width, height, window=None):
     # Decode native indices in bounded blocks before RGB resampling. A real
     # temporary RGBA dataset avoids native VRT mask/colour-table pointer issues
     # seen across GDAL builds. Reuse it for overview and detailed analysis.
@@ -116,21 +116,21 @@ def _palette_rgb(source, width, height):
         try:
             with rasterio.open(path) as expanded:
                 return expanded.read([1, 2, 3], out_shape=(3, height, width),
-                                     resampling=Resampling.bilinear)
+                                     resampling=Resampling.bilinear, window=window)
         finally:
             if not keep:
                 path.unlink(missing_ok=True)
 
 
-def read_rgb(source, width, height):
+def read_rgb(source, width, height, window=None):
     """Return byte RGB; preserve the established RGB/RGBA reading path exactly."""
     if source.count == 1 and source.colorinterp[0] == ColorInterp.palette:
-        return _palette_rgb(source, width, height)
+        return _palette_rgb(source, width, height, window)
     if source.count >= 3:
         types = source.dtypes[:3]
         if all(kind == 'uint8' for kind in types):
-            return source.read([1, 2, 3], out_shape=(3, height, width), resampling=Resampling.bilinear)
+            return source.read([1, 2, 3], out_shape=(3, height, width), resampling=Resampling.bilinear, window=window)
         if all(kind == 'uint16' for kind in types) and _byte_values_in_uint16(source):
-            values = source.read([1, 2, 3], out_shape=(3, height, width), resampling=Resampling.bilinear)
+            values = source.read([1, 2, 3], out_shape=(3, height, width), resampling=Resampling.bilinear, window=window)
             return np.minimum(values, 255).astype(np.uint8)
     raise ValueError('Нужна цветная RGB/RGBA-карта с цветами 0–255 или TIFF с цветовой таблицей.')

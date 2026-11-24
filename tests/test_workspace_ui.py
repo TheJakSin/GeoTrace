@@ -117,7 +117,8 @@ def test_workspace_groups_shift_panels_review_and_palette_visibility(tmp_path):
             if help_dialog.property('opened'): break
             QTest.qWait(20)
         assert help_dialog.property('opened') and help_dialog.property('visible')
-        assert '0.8 beta 1' in help_dialog.property('title')
+        from geotrace.release_info import version_label
+        assert version_label() in help_dialog.property('title')
         QTest.keyClick(window,Qt.Key_P);assert b.edit_tool==0, 'Modal help must block map actions.'
         QTest.keyClick(window,Qt.Key_Escape)
         # visible stays true throughout the exit animation. Wait for closure,

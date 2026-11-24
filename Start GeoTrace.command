@@ -7,4 +7,4 @@ fi
 if ! .venv/bin/python -c "import geotrace.app; import PySide6.QtWebEngineQuick" >/dev/null 2>&1; then
     .venv/bin/python -m pip install -e .
 fi
-exec .venv/bin/python -m geotrace.app "$@"
+exec .venv/bin/python -m geotrace.launcher "$@"

@@ -96,7 +96,7 @@ Rectangle {
                     var code=title.slice(prefix.length)
                     backend.reportWebMap(code)
                     if(code==="ready") {
-                        browser.runJavaScript("GeoTraceMap.setType('"+["map","satellite","hybrid"][mapType.currentIndex]+"');GeoTraceMap.showOutlines("+outlineToggle.checked+");GeoTraceMap.showRaster("+rasterToggle.checked+");GeoTraceMap.showPolygons("+polygonToggle.checked+");GeoTraceMap.setRasterOpacity("+rasterAlpha.value+");GeoTraceMap.setPolygonOpacity("+polygonAlpha.value+")")
+                        browser.runJavaScript("GeoTraceMap.setType('"+["map","satellite","hybrid"][mapType.currentIndex]+"');GeoTraceMap.showOutlines("+outlineToggle.checked+");GeoTraceMap.showRaster("+rasterToggle.checked+");GeoTraceMap.showPolygons("+polygonToggle.checked+");GeoTraceMap.showLines("+lineToggle.checked+");GeoTraceMap.setRasterOpacity("+rasterAlpha.value+");GeoTraceMap.setPolygonOpacity("+polygonAlpha.value+")")
                     }
                 }
             }
@@ -148,6 +148,8 @@ Rectangle {
                             onMoved: browser.runJavaScript("window.GeoTraceMap && GeoTraceMap.setPolygonOpacity("+value+")") }
                         Label { text: Math.round(polygonAlpha.value*100)+"%"; Layout.preferredWidth: 34; horizontalAlignment: Text.AlignRight; color: "#687383" }
                     }
+                    LayerCheckBox {id:lineToggle;objectName:"webMapLines";text:"Линии и разломы";checked:true;visible:page.appState.workspaceEnabled===true
+                        onClicked:browser.runJavaScript("window.GeoTraceMap && GeoTraceMap.showLines("+checked+")")}
                     LayerCheckBox { id: outlineToggle; objectName: "webMapOutlines"; text: "Контур карты и KML"; checked: true
                         onClicked: browser.runJavaScript("window.GeoTraceMap && GeoTraceMap.showOutlines("+checked+")") }
                     Label { Layout.fillWidth: true; text: "Редактирование — во вкладке «Карта»."; color: "#687383"; font.pixelSize: 11; wrapMode: Text.WordWrap }

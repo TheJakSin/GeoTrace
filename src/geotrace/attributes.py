@@ -105,8 +105,9 @@ def change_schema(result, fields):
     from .core import Result
     fields=validate_schema(fields)
     features=[]
+    old_keys={field['key'] for field in result.fields}
     for feature in result.features:
-        props={k:v for k,v in feature['properties'].items() if k in BASE_FIELDS}
+        props={k:v for k,v in feature['properties'].items() if k not in old_keys or k in BASE_FIELDS}
         props.update(values_for(fields,feature['properties']))
         features.append(dict(geometry=feature['geometry'],properties=props))
     return Result(result.raster,result.labels,features,[list(c) for c in result.colors],fields)

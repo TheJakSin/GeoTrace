@@ -10,6 +10,7 @@ html,body,#map{width:100%;height:100%;margin:0;font:14px Arial,sans-serif;backgr
 "use strict";
 let map, outlines, project, rasterLayer, polygonLayer, rasterPane;
 let visibleOutlines=true, visibleRaster=true, visiblePolygons=true, rasterOpacity=.8, polygonOpacity=.25;
+let visibleLines=true;
 let rasterRevision=-1, vectorRevision=-1, fittedRasterRevision=-1, requestGeneration=0;
 function rasterVisibility(){
     if(rasterLayer){
@@ -21,8 +22,8 @@ function rasterVisibility(){
 }
 function polygonVisibility(){
     if(polygonLayer){
-        polygonLayer.setFilter(()=>visiblePolygons);
-        polygonLayer.objects.options.set('fillOpacity',polygonOpacity);
+        polygonLayer.setFilter(object=>object.properties.kind==='line'?visibleLines:visiblePolygons);
+        polygonLayer.objects.each(object=>{if(object.properties.kind!=='line')polygonLayer.objects.setObjectOptions(object.id,{fillOpacity:polygonOpacity*(object.properties.baseFillOpacity===undefined?1:object.properties.baseFillOpacity)});});
     }
 }
 function setMapStatus(code, headline, detail) {
@@ -38,6 +39,7 @@ window.GeoTraceMap={
     showOutlines(value){visibleOutlines=!!value;if(outlines)outlines.options.set('visible',visibleOutlines);},
     showRaster(value){visibleRaster=!!value;rasterVisibility();},
     showPolygons(value){visiblePolygons=!!value;polygonVisibility();},
+    showLines(value){visibleLines=!!value;polygonVisibility();},
     setRasterOpacity(value){rasterOpacity=Math.max(0,Math.min(1,Number(value)));rasterVisibility();},
     setPolygonOpacity(value){polygonOpacity=Math.max(0,Math.min(1,Number(value)));polygonVisibility();},
     fitProject(){if(map && project && project.bounds) map.setBounds(project.bounds,{checkZoomRange:true,zoomMargin:60});},

@@ -9,7 +9,7 @@ if errorlevel 1 (
     .venv\Scripts\python.exe -m pip install -e .
     if errorlevel 1 goto fail
 )
-.venv\Scripts\python.exe -m geotrace.app %*
+.venv\Scripts\python.exe -m geotrace.launcher %*
 if errorlevel 1 goto fail
 exit /b 0
 :fail

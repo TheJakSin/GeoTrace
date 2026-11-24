@@ -11,6 +11,9 @@ Rectangle {
     required property bool showEvidence
     required property bool picking
     signal sampled(int column, int row)
+    property bool framing: false
+    signal frameSelected(real x0, real y0, real x1, real y1)
+    property point frameEnd
 
     color: "#e8ebef"
     radius: 3
@@ -50,6 +53,12 @@ Rectangle {
         Image { anchors.fill: parent; source: view.paletteSource; smooth: false; cache: false }
         Image { anchors.fill: parent; source: view.evidenceSource; visible: view.showEvidence; smooth: false; cache: false }
     }
+    Rectangle {
+        visible:view.framing && pointer.pressed
+        x:Math.min(pointer.start.x,view.frameEnd.x);y:Math.min(pointer.start.y,view.frameEnd.y)
+        width:Math.abs(pointer.start.x-view.frameEnd.x);height:Math.abs(pointer.start.y-view.frameEnd.y)
+        color:"#22356ac3";border.color:"#356ac3";border.width:2
+    }
     MouseArea {
         id: pointer; objectName: "sampleMap"; anchors.fill: parent
         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
@@ -62,13 +71,21 @@ Rectangle {
             start = Qt.point(mouse.x,mouse.y)
             mapAnchor = Qt.point((mouse.x-mapLayer.x)/mapLayer.width,(mouse.y-mapLayer.y)/mapLayer.height)
             moved = false
+            view.frameEnd=start
         }
         onPositionChanged: function(mouse) {
             if (!pressed) return
             if (Math.hypot(mouse.x-start.x,mouse.y-start.y) >= Qt.styleHints.startDragDistance) moved = true
+            if(view.framing && pressedButtons===Qt.LeftButton){view.frameEnd=Qt.point(mouse.x,mouse.y);return}
             if (moved) view.setCenterAt(mouse.x,mouse.y,mapAnchor.x,mapAnchor.y)
         }
         onReleased: function(mouse) {
+            if(view.framing && mouse.button===Qt.LeftButton){
+                var x0=Math.max(0,Math.min(view.columns,(start.x-mapLayer.x)/view.pixelScale)),y0=Math.max(0,Math.min(view.rows,(start.y-mapLayer.y)/view.pixelScale))
+                var x1=Math.max(0,Math.min(view.columns,(mouse.x-mapLayer.x)/view.pixelScale)),y1=Math.max(0,Math.min(view.rows,(mouse.y-mapLayer.y)/view.pixelScale))
+                if(Math.abs(x1-x0)>=4&&Math.abs(y1-y0)>=4)view.frameSelected(Math.min(x0,x1),Math.min(y0,y1),Math.max(x0,x1),Math.max(y0,y1))
+                return
+            }
             if (moved || mouse.button !== Qt.LeftButton || !view.picking) return
             var x = Math.floor((mouse.x-mapLayer.x)/view.pixelScale)
             var y = Math.floor((mouse.y-mapLayer.y)/view.pixelScale)

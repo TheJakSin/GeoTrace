@@ -4,31 +4,127 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   test:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install -e ".[dev]"
+      - run: python -m pip install -e ".[dev,packaging]"
       - run: python -m pytest -q tests/test_raster_colors.py
       - run: python -m pytest -q
       - name: Stamp build identity
         run: python tools/write_build_info.py --number ${{ github.run_number }} --commit ${{ github.sha }} --run-url https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - id: version
+        shell: bash
+        run: python -c "import geotrace,os; open(os.environ['GITHUB_OUTPUT'],'a').write('version='+geotrace.__version__+'\n')"
       - run: python -m build
+      - name: Install Windows installer compiler
+        if: runner.os == 'Windows'
+        run: choco install nsis --yes --no-progress
+      - name: Build and check native distribution
+        run: python tools/build_desktop.py
+      - name: Check Windows installer payload
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist/desktop/*-Setup.exe | Select-Object -First 1
+          $destination = Join-Path $env:RUNNER_TEMP 'GeoTraceInstalled'
+          $process = Start-Process $setup.FullName -ArgumentList @('/S', "/D=$destination") -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw 'Installer failed' }
+          python tools/smoke_frozen.py "$destination/GeoTrace.exe" --report dist/desktop/installed-Windows.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed application check failed' }
+      - name: Check macOS installer payload
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          sudo installer -pkg dist/desktop/*.pkg -target /
+          python tools/smoke_frozen.py /Applications/GeoTrace.app/Contents/MacOS/GeoTrace --report dist/desktop/installed-${{ matrix.os }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: documentation-preview-${{ matrix.os }}
+          path: dist/desktop/selfcheck-*.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: dist/desktop/*
+          compression-level: 0
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: python-package-${{ matrix.os }}
-          path: dist/*
+          path: dist/*.whl
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: test-screenshots-${{ matrix.os }}
-          path: test-screenshots/*
+          name: diagnostics-${{ matrix.os }}
+          path: |
+            test-screenshots/*
+            build/pyinstaller/GeoTrace/warn-GeoTrace.txt
+            dist/desktop/*.json
           if-no-files-found: ignore
+  documents:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use visually checked release documents
+        shell: bash
+        run: |
+          cd docs/release
+          sha256sum -c SHA256SUMS.txt
+          cd ../..
+          python3 -c "import hashlib,json; from pathlib import Path; p=Path('docs'); m=json.loads((p/'release/sources.json').read_text()); assert all(hashlib.sha256((p/n).read_bytes()).hexdigest()==v for n,v in m.items()), 'Regenerate and visually review documents after source changes'"
+          mkdir -p dist/documents
+          cp docs/release/*.docx docs/release/*.pdf dist/documents/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: user-documents
+          path: dist/documents/*
+  release:
+    needs: [test, documents]
+    if: github.ref == 'refs/heads/main' && needs.test.outputs.version == '1.0.0'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: assets
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: user-documents
+          path: assets
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.test.outputs.version }}
+        shell: bash
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "A release for this version already exists; bump the version before replacing it."
+            exit 1
+          fi
+          rm -f assets/SHA256SUMS.txt
+          python -c "from pathlib import Path; import hashlib; p=Path('assets'); (p/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(f.read_bytes()).hexdigest()+'  '+f.name+'\n' for f in sorted(p.iterdir()) if f.is_file() and f.name!='SHA256SUMS.txt'))"
+          cp docs/RELEASE_1_0.md build-release-notes.md
+          echo "" >> build-release-notes.md
+          echo "Checks build $GITHUB_RUN_NUMBER · $GITHUB_SHA" >> build-release-notes.md
+          gh release create "$tag" --target "$GITHUB_SHA" --title "GeoTrace 1.0 · build $GITHUB_RUN_NUMBER" --notes-file build-release-notes.md --draft assets/*
+          gh release edit "$tag" --draft=false --latest
+          gh release view "$tag" --json url,assets
