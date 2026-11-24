@@ -1,0 +1,114 @@
+name: Publish verified build
+on:
+  workflow_run:
+    workflows: [Checks]
+    types: [completed]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: geotrace-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.event != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN: ${{ github.event.workflow_run.id }}
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_BUILD: ${{ github.event.workflow_run.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Require every native platform and reviewed documents
+        shell: bash
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/jobs?per_page=100" > verified-jobs.json
+          python3 - <<'PY'
+          import json,os,tomllib
+          from pathlib import Path
+          jobs=json.loads(Path('verified-jobs.json').read_text())['jobs']
+          required={'test (windows-latest)','test (macos-15)','test (macos-15-intel)','documents'}
+          assert {j['name'] for j in jobs if j['name'] in required and j['conclusion']=='success'}==required,'Native verification is incomplete'
+          version=tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          assert version=='1.0.0'
+          with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('VERSION='+version+'\n')
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          pattern: desktop-*
+          path: assets
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          name: user-documents
+          path: assets
+      - name: Verify payload identity and prepare release names
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          p=Path('assets');number=int(os.environ['SOURCE_BUILD']);sha=os.environ['SOURCE_SHA']
+          reports=[f for f in p.glob('*.json') if f.name.startswith(('installed-','selfcheck-'))]
+          assert len(reports)==6, 'Expected built and installed reports from three platforms'
+          for f in reports:
+              r=json.loads(f.read_text());assert r['ok'] and r['browser_renderer'] and r['geopackage'] and r['pdf'],f.name
+              assert r['build']['number']==number and r['build']['commit']==sha and r['version']==os.environ['VERSION'],f.name
+          for original,label in [('Руководство','User-Guide'),('Возможности','Overview')]:
+              for ext in ('docx','pdf'):
+                  name=f'GeoTrace-1.0-{original}.{ext}';file=p/name;source=Path('docs/release')/name
+                  assert hashlib.sha256(file.read_bytes()).digest()==hashlib.sha256(source.read_bytes()).digest(),name
+                  file.rename(p/f'GeoTrace-1.0-{label}.{ext}')
+          for name in (f'GeoTrace-1.0.0-build{number}-Windows-x64-Setup.exe',f'GeoTrace-1.0.0-build{number}-Windows-x64.zip',f'GeoTrace-1.0.0-build{number}-macOS-arm64.pkg',f'GeoTrace-1.0.0-build{number}-macOS-arm64.zip',f'GeoTrace-1.0.0-build{number}-macOS-x86_64.pkg',f'GeoTrace-1.0.0-build{number}-macOS-x86_64.zip'):
+              assert (p/name).stat().st_size>1000000,name
+          (p/'SHA256SUMS.txt').unlink(missing_ok=True)
+          sums=[]
+          for f in sorted(p.iterdir()):
+              if f.is_file():
+                  with f.open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
+                  sums.append(digest+'  '+f.name+'\n')
+          (p/'SHA256SUMS.txt').write_text(''.join(sums))
+          PY
+      - name: Publish the verified draft
+        shell: bash
+        run: |
+          tag="v$VERSION"
+          cp docs/RELEASE_1_0.md release-notes.md
+          echo "" >> release-notes.md
+          echo "Checks native build $SOURCE_BUILD · $SOURCE_SHA" >> release-notes.md
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" > release.json 2>/dev/null; then
+            python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          r=json.loads(Path('release.json').read_text())
+          assert r['draft'],'A published version is never replaced'
+          assert r['target_commitish']==os.environ['SOURCE_SHA'],'Draft belongs to another source build'
+          Path('malformed-assets.txt').write_text(''.join(str(a['id'])+'\n' for a in r['assets'] if a['name'] in ('GeoTrace-1.0-.docx','GeoTrace-1.0-.pdf')))
+          PY
+            while read -r asset; do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset"
+            done < malformed-assets.txt
+          else
+            gh release create "$tag" --target "$SOURCE_SHA" --title "GeoTrace 1.0.0 · build $SOURCE_BUILD" --notes-file release-notes.md --draft
+          fi
+          for file in assets/*; do gh release upload "$tag" "$file" --clobber; done
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" > uploaded-release.json
+          python3 - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          r=json.loads(Path('uploaded-release.json').read_text());assets={a['name']:a for a in r['assets']}
+          for f in Path('assets').iterdir():
+              if f.is_file():
+                  with f.open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
+                  assert assets[f.name]['digest']=='sha256:'+digest,f.name
+          PY
+          gh release edit "$tag" --title "GeoTrace 1.0.0 · build $SOURCE_BUILD" --notes-file release-notes.md --draft=false --latest
+          gh release view "$tag" --json url,assets
