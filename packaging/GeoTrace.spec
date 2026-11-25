@@ -8,6 +8,7 @@ data=collect_data_files('geotrace')
 for package in ('rasterio','fiona'):
     data.extend(collect_data_files(package))
 data.extend([(str(root/'build/manual/USER_GUIDE.html'),'geotrace/resources/docs'),
+             (str(root/'build/manual/images'),'geotrace/resources/docs/images'),
              (str(root/'build/notices'),'geotrace/resources/notices')])
 hidden=collect_submodules('geotrace')+['PySide6.QtWebEngineQuick','PySide6.QtQuickControls2','PySide6.QtSvg','PySide6.QtNetwork']
 hidden+=collect_submodules('rasterio')+collect_submodules('fiona')

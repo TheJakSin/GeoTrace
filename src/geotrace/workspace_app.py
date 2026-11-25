@@ -53,7 +53,7 @@ def seam_sites(document, result):
     for i, first in enumerate(document.sheets):
         if first.result is None:
             continue
-        a = [(project_geometry(f['geometry'], first.raster.crs_wkt), first.groups[f['properties']['class_id']]) for f in first.result.features]
+        a = [(project_geometry(f['geometry'], first.raster.crs_wkt), first.groups.get(f['properties']['class_id'],0)) for f in first.result.features]
         for second in document.sheets[i+1:]:
             if second.result is None:
                 continue
@@ -62,7 +62,7 @@ def seam_sites(document, result):
                 overlap = overlap.intersection(document.area)
             if overlap.is_empty:
                 continue
-            b = [(project_geometry(f['geometry'], second.raster.crs_wkt), second.groups[f['properties']['class_id']]) for f in second.result.features]
+            b = [(project_geometry(f['geometry'], second.raster.crs_wkt), second.groups.get(f['properties']['class_id'],0)) for f in second.result.features]
             tree = STRtree([g for g, _ in b])
             conflicts = []
             for geometry, cid in a:
@@ -83,9 +83,29 @@ def seam_sites(document, result):
 def build_workspace(document, folder):
     canvas = document.canvas()
     result = document.compose(canvas)
+    from .topology import clean_result_interiors
+    result = clean_result_interiors(result)
     save_preview(canvas, Path(folder)/'raster.png')
     preview_overlay(document, result, Path(folder)/'overlay.png', Path(folder)/'lines.png')
     return document, canvas, result
+
+
+def group_workspace(document, folder):
+    """Group edits retain the current objects, including unreviewed geometry."""
+    if document.manual is None:
+        return build_workspace(document, folder)
+    result = document.manual
+    if len(document.sheets)>1:
+        from dataclasses import replace
+        raster=result.raster
+        h,w=raster.valid.shape
+        bounds=(*raster.transform*(0,h), *raster.transform*(w,0))
+        rgb=np.array(map_image(document,bounds,w,h))[:,:,:3]
+        result=Result(replace(raster,rgb=rgb),result.labels,result.features,result.colors,result.fields)
+        document.manual=result
+    save_preview(result.raster, Path(folder)/'raster.png')
+    preview_overlay(document, result, Path(folder)/'overlay.png', Path(folder)/'lines.png')
+    return document, result.raster, result
 
 
 def import_sheets(document, paths, folder):
@@ -95,6 +115,11 @@ def import_sheets(document, paths, folder):
 
 def open_workspace(path, folder):
     document = load_document(path, Path(folder)/'sources')
+    if document.manual is not None and CRS.from_wkt(document.manual.raster.crs_wkt)==CRS.from_string(DISPLAY_CRS):
+        # Reopening is not a request to recompute unreviewed objects. The saved
+        # output is authoritative; future explicit digitisation uses the sheets.
+        document.dissolve_classes=False
+        return group_workspace(document,folder)
     return build_workspace(document, folder)
 
 
@@ -182,6 +207,15 @@ def project_review(sites, source, canvas):
     return output
 
 
+def preview_smoothing(document,result,mode,strength,identities,folder):
+    from .smoothing import smooth_result
+    def check():
+        if (Path(folder)/'smooth-cancel').exists():raise Cancelled('Предпросмотр сглаживания отменён.')
+    output,info=smooth_result(document,result,mode,strength,identities,check)
+    preview_overlay(document,output,Path(folder)/'edit-preview.png')
+    return output,info
+
+
 _render_application = None
 
 
@@ -196,16 +230,17 @@ def render_application():
     return _render_application
 
 
-def viewport_images(document, result, bounds, width, height):
+def viewport_images(document, result, bounds, width, height,labels_only=False):
     def encode(image):
         stream = BytesIO()
         image.save(stream, format='PNG')
         return 'data:image/png;base64,'+base64.b64encode(stream.getvalue()).decode()
-    output = dict(detailUrl=encode(map_image(document, bounds, width, height, detailed=True)))
+    output = {} if labels_only else dict(detailUrl=encode(map_image(document, bounds, width, height, detailed=True)))
     labels=[];occupied=[];visible=box(*bounds)
     kx,ky=width/(bounds[2]-bounds[0]),height/(bounds[3]-bounds[1])
     candidates=[]
-    for f in result.features:
+    for f in result.features if result is not None else []:
+        if f['properties']['class_id'] in document.settings.get('hidden_classes',[]):continue
         cls=document.classes[f['properties']['class_id']-1];key=cls['style'].get('label','')
         if key and f['geometry'].intersects(visible):
             value=cls['name'] if key=='class_name' else f['properties'].get(key)
@@ -265,6 +300,9 @@ class WorkspaceBackend(Backend):
 
     def __init__(self, *args, **kwargs):
         self.document = Document()
+        from threading import Event
+        self.update_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='geotrace-update')
+        self.update_future=None;self.update_cancel=Event();self.update_progress=(0,0);self.update_release=None
         self.workspace_future = None
         self.workspace_kind = ''
         self.pending_document = None
@@ -275,7 +313,7 @@ class WorkspaceBackend(Backend):
         self.line_drag = None
         self.layout_settings = None
         self.last_view = None
-        self.detail_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='geotrace-detail')
+        self.detail_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix='geotrace-detail')
         self.detail_future = None
         self.detail_pending = None
         self.detail_key = None
@@ -284,7 +322,12 @@ class WorkspaceBackend(Backend):
         self.matching_a={}
         self.matching_b={}
         self.matching_apply=False
+        self.polygon_epoch=0
+        self.polygon_view_key=None
+        self.rebuild_selected_ids=[]
         super().__init__(*args, **kwargs)
+        from .detail_tiles import DetailTiles
+        self.detail_tiles=DetailTiles(self.detail_pool,Path(self.temp.name)/'detail-tiles')
         self.prepare_on_import = False
         recent = self.settings.value('workspace/recent', [], type=list)
         self.notify(workspaceEnabled=True, sheets=[], projectClasses=[], activeSheet='', lineTypes=[], lineCount=0,
@@ -293,7 +336,10 @@ class WorkspaceBackend(Backend):
                     paletteInputUrl='', paletteWidth=1, paletteHeight=1, selectionMeasurement='',
                     summary={}, layoutPreviewUrl='', layoutPages=0, layoutTemplates=[], recentProjects=recent,
                     classMappings=[], checkpointItems=[], workspacePanel='',
-                    detailUrl='', detailRect={}, detailLabels=[], lineDragPreview=[],
+                    polygonPaths=[],polygonEpoch=0,drawClassId=0,groupFocusId=0,hiddenClassIds=[],
+                    editStrokeWidth=float(self.settings.value('editor/strokeWidth',1.4)),
+                    detailUrl='', detailRect={}, detailLabels=[],detailTiles=[], lineDragPreview=[],
+                    updateState='idle',updateMessage='Проверьте наличие новой версии.',updateProgress=0,updateVersion='',updateNotes='',
                     groupMatching=False,matchingSide='A',matchingA={},matchingB={},matchingUrl='',
                     status='Создайте проект участка: добавьте KML и листы карты.')
 
@@ -314,7 +360,7 @@ class WorkspaceBackend(Backend):
                     'recognise_all':'Оцифровываю листы по очереди…', 'save':'Сохраняю проект участка…',
                     'autosave_workspace':'Создаю копию восстановления…', 'export_workspace':'Сохраняю слои GeoPackage…',
                     'detect_lines':'Бета-поиск линейных объектов…', 'layout':'Готовлю макет…', 'export_layout':'Экспортирую макет…',
-                    'checkpoint':'Создаю контрольное сохранение…', 'seams':'Проверяю стыки и покрытие участка…'}[kind])
+                    'smooth':'Сглаживаю общие границы…', 'checkpoint':'Создаю контрольное сохранение…', 'seams':'Проверяю стыки и покрытие участка…'}[kind])
         return True
 
     def _install(self, output, fit=False):
@@ -322,7 +368,7 @@ class WorkspaceBackend(Backend):
         self.detail_key = None
         self.detail_pending = None
         self.detail_running = None
-        self.notify(detailUrl='', detailLabels=[])
+        if self.detail_tiles.reset(document,canvas):self.notify(detailUrl='',detailLabels=[],detailTiles=[])
         self._installing = True
         try:
             self.document, self.raster = document, canvas
@@ -343,6 +389,8 @@ class WorkspaceBackend(Backend):
 
     @Slot()
     def poll(self):
+        if getattr(self,'_closing',False):return
+        self.poll_updates()
         self.poll_detail()
         if self.workspace_future is None or not self.workspace_future.done():
             super().poll()
@@ -378,6 +426,9 @@ class WorkspaceBackend(Backend):
                 if kind=='rebuild' and self.matching_apply:
                     self.matching_apply=False
                     self.groupsMatched.emit()
+                if kind=='rebuild' and self.rebuild_selected_ids:
+                    ids=set(self.rebuild_selected_ids);self.rebuild_selected_ids=[]
+                    self.set_edit_selection([i for i,f in enumerate(self.result.features) if f['properties']['object_id'] in ids and self.feature_visible(f)])
             elif kind == 'prepare':
                 self.base_palette = output['palette']
                 self.quality_original = copy.deepcopy(self.base_palette)
@@ -425,6 +476,15 @@ class WorkspaceBackend(Backend):
                 self.line_preview = output
                 self.notify(linePreviewCount=len(output), status=f'Найдено линий: {len(output)}. Проверьте предложения перед применением.')
                 self.paint_line_preview()
+            elif kind == 'smooth':
+                if getattr(self,'smooth_cancelled',False):raise Cancelled('Предпросмотр сглаживания отменён.')
+                output,info=output
+                self.edit_preview=output if info['changed'] else None
+                self.geometry_operation='smooth';self.geometry_primary_id=None
+                message=(f"Изменено полигонов: {info['changed']}. Смещение до {info['max_shift_pixels']:.2f} пикселя исходника. Общие границы и покрытие сохранены." if info['changed'] else 'В выбранной области нет границ, которые можно безопасно сгладить с этой силой.')
+                if info['limited']:message+=' Сила ограничена проверкой геометрии.'
+                self.notify(smoothInfo=message,geometryReady=bool(info['changed']),geometryPreviewVisible=True,
+                    editPreviewUrl=self.url('edit-preview.png') if info['changed'] else '',editSelectionUrl='',status=message)
             elif kind == 'layout':
                 self.revision += 1
                 self.notify(layoutPreviewUrl=self.url('layout-preview.png'), layoutPages=output, status='Макет готов к просмотру.')
@@ -502,6 +562,14 @@ class WorkspaceBackend(Backend):
         doc = self.document.clone()
         doc.sheet(identity).visible = value
         self.task('rebuild', build_workspace, doc, self.temp.name)
+
+    @Slot(bool)
+    def setSmoothScanSeams(self, value):
+        if self.data['busy']:return
+        doc=self.document.clone()
+        doc.settings['smooth_scan_seams']=value
+        doc.manual=_copy_result(self.result)
+        self._group_change(doc,'Отображение стыков сканов обновлено. Координаты и объекты сохранены.')
 
     @Slot(QUrl)
     def loadArea(self, url):
@@ -668,6 +736,10 @@ class WorkspaceBackend(Backend):
         self.notify(autoReady=False, autoPreviewUrl='', status='Результат листа применён. Можно сопоставить группы соседних листов.')
 
     def set_result(self, output):
+        from .topology import clean_result_interiors
+        output=clean_result_interiors(output)
+        self.polygon_epoch+=1
+        self.polygon_view_key=None
         if output is not None and self.document.sheets:
             self.document.fields = copy.deepcopy(output.fields)
             while len(self.document.classes) < len(output.colors):
@@ -676,6 +748,7 @@ class WorkspaceBackend(Backend):
                     style=validate_style(dict(fill='#%02x%02x%02x' % tuple(output.colors[index])))))
             preview_overlay(self.document, output, Path(self.temp.name)/'overlay.png', Path(self.temp.name)/'lines.png')
         super().set_result(output)
+        self.notify(polygonEpoch=self.polygon_epoch)
         if self.document.sheets and output is not None:
             self.publish_document()
 
@@ -696,6 +769,137 @@ class WorkspaceBackend(Backend):
         else:
             self.notify(selectionMeasurement='')
 
+    def feature_visible(self,feature):
+        return feature['properties']['class_id'] not in self.document.settings.get('hidden_classes',[])
+
+    @Slot(float,float,float,float,float)
+    @Slot(float,float,float,float,float,bool)
+    def requestPolygonVectors(self,x,y,width,height,zoom,show_auto=False):
+        if not np.isfinite((x,y,width,height,zoom)).all() or min(width,height,zoom)<=0:return
+        result=self.edit_preview if self.data.get('geometryReady') and self.data.get('geometryPreviewVisible',True) and self.edit_preview is not None else self.result
+        if show_auto and self.auto_preview is not None:result=self.auto_preview
+        selected=[self.result.features[i]['properties']['object_id'] for i in self.edit_selected] if self.result else []
+        if not selected and self.result is not None and 0<=self.selected<len(self.result.features):selected=[self.result.features[self.selected]['properties']['object_id']]
+        if result is not self.result and result is not None:
+            old={f['properties']['object_id']:f['geometry'] for f in self.result.features} if self.result else {}
+            selected=[f['properties']['object_id'] for f in result.features if f['properties']['object_id'] not in old or not f['geometry'].equals_exact(old[f['properties']['object_id']],0)]
+        key=(id(result),self.polygon_epoch,tuple(selected),x,y,width,height,zoom,id(self.edge_drag))
+        if key==self.polygon_view_key:return
+        from .display import polygon_paths
+        doc=self.pending_document if show_auto and self.pending_document is not None else self.document
+        cut_key=(id(result),id(doc),self.polygon_epoch)
+        if getattr(self,'polygon_cut_key',None)!=cut_key:
+            from .sheet_seams import technical_boundaries
+            self.polygon_cuts=technical_boundaries(doc,result)
+            self.polygon_cut_key=cut_key
+        paths=polygon_paths(result,doc,(x,y,width,height),zoom,selected,self.edge_drag,self.tree if result is self.result else None,self.polygon_cuts)
+        self.polygon_view_key=key
+        self.notify(polygonPaths=paths)
+
+    @Slot(result=bool)
+    def beginSmoothing(self):
+        if self.data['busy'] or self.data.get('autoReady') or (self.data.get('geometryReady') and getattr(self,'geometry_operation','')!='smooth'):
+            self.notify(status='Сначала примените или закройте текущий предпросмотр.');return False
+        self.notify(smoothingOpen=True,smoothInfo='',geometryPreviewVisible=True)
+        return True
+
+    @Slot(str,int,str,float)
+    def previewSmoothing(self,scope,group,mode,strength):
+        if self.data['busy'] or self.result is None or self.polygon_locked():return
+        if scope not in ('selected','group','all'):
+            self.notify(error=True,status='Выберите область сглаживания.');return
+        identities=None
+        if scope=='selected':identities={self.result.features[i]['properties']['object_id'] for i in (self.edit_selected or ([self.selected] if 0<=self.selected<len(self.result.features) else []))}
+        elif scope=='group':identities={f['properties']['object_id'] for f in self.result.features if f['properties']['class_id']==group}
+        if identities is not None and not identities:
+            self.notify(smoothInfo='В выбранной области нет полигонов.');return
+        self.smooth_cancelled=False
+        (Path(self.temp.name)/'smooth-cancel').unlink(missing_ok=True)
+        self.task('smooth',preview_smoothing,self.document.clone(),_copy_result(self.result),mode,strength,identities,self.temp.name)
+
+    @Slot(bool)
+    def showSmoothPreview(self,visible):
+        self.notify(geometryPreviewVisible=visible)
+
+    @Slot()
+    def cancelSmoothing(self):
+        if self.workspace_kind=='smooth' and self.workspace_future is not None:
+            self.smooth_cancelled=True;(Path(self.temp.name)/'smooth-cancel').touch()
+        if getattr(self,'geometry_operation','')=='smooth':self.invalidate_edit_preview()
+        self.notify(smoothingOpen=False,geometryPreviewVisible=True)
+
+    @Slot(float)
+    def setEditStrokeWidth(self,width):
+        if np.isfinite(width) and .5<=width<=4:
+            self.settings.setValue('editor/strokeWidth',float(width))
+            self.notify(editStrokeWidth=float(width))
+
+    @Slot(int)
+    def setDrawGroup(self,identity):
+        if 0<=identity<=len(self.document.classes):
+            self.document.settings['draw_class']=identity
+            self.notify(drawClassId=identity)
+
+    def _group_change(self,doc,status,focus=0):
+        doc.dissolve_classes=False
+        if doc.manual is not None:
+            from .groups import palette
+            doc.manual.colors=palette(doc)
+        self.record_undo(None)
+        self.rebuild_selected_ids=[f['properties']['object_id'] for i,f in enumerate(self.result.features) if i in self.edit_selected or i==self.selected] if self.result else []
+        self.rebuild_note=status
+        self.notify(groupFocusId=focus)
+        self.task('rebuild',group_workspace,doc,self.temp.name)
+
+    @Slot(str,str,result=bool)
+    def createGroup(self,name,color):
+        if self.data['busy']:return False
+        try:
+            from .groups import create_group
+            doc=self.document.clone();doc.manual=_copy_result(self.result)
+            identity=create_group(doc,name,color);doc.settings['draw_class']=identity
+            self._group_change(doc,'Новая группа создана.',identity)
+            return True
+        except ValueError as exc:self.notify(error=True,status=str(exc));return False
+
+    @Slot(int,int,result=bool)
+    def deleteGroup(self,identity,target):
+        if self.data['busy'] or self.polygon_locked():return False
+        try:
+            from .groups import remove_group
+            doc=self.document.clone();doc.manual=_copy_result(self.result)
+            focus=remove_group(doc,identity,target)
+            self._group_change(doc,'Группа удалена. Её объекты сохранены в выбранной группе.',focus)
+            return True
+        except ValueError as exc:self.notify(error=True,status=str(exc));return False
+
+    @Slot(int,result=bool)
+    def setObjectsGroup(self,identity):
+        if self.data['busy'] or self.polygon_locked() or self.result is None:return False
+        if not 1<=identity<=len(self.document.classes):return False
+        indices=self.edit_selected or ([self.selected] if self.selected>=0 else [])
+        if not indices:return False
+        doc=self.document.clone();doc.manual=_copy_result(self.result)
+        for i in indices:doc.manual.features[i]['properties'].update(class_id=identity,origin='manual_group',review='edited')
+        from .editing import _result_from_features
+        doc.manual=_result_from_features(self.raster,doc.manual.features,doc.manual.colors,doc.manual.fields)
+        self._group_change(doc,f'Группа изменена у {len(indices)} объектов.',identity)
+        return True
+
+    @Slot(int,bool)
+    def setGroupVisible(self,identity,visible):
+        if self.data['busy'] or not 1<=identity<=len(self.document.classes):return
+        doc=self.document.clone();doc.manual=_copy_result(self.result)
+        hidden=set(doc.settings.get('hidden_classes',[]))
+        if visible:hidden.discard(identity)
+        else:hidden.add(identity)
+        doc.settings['hidden_classes']=sorted(hidden)
+        self._group_change(doc,'Видимость группы изменена.',identity)
+
+    @Slot(int)
+    def focusGroup(self,identity):
+        self.notify(groupFocusId=identity)
+
     @Slot(str, int, int, str)
     def assignGroup(self, sheet_id, local, class_id, name):
         if self.data['busy']:
@@ -710,12 +914,7 @@ class WorkspaceBackend(Backend):
 
     @Slot(bool)
     def stitchClasses(self, enabled):
-        if self.data['busy']:
-            return
-        self.record_undo(None)
-        doc = self.document.clone()
-        doc.dissolve_classes = enabled
-        self.task('rebuild', build_workspace, doc, self.temp.name)
+        self.notify(status='Автоматическая сшивка временно отключена. Сопоставление групп доступно без изменения геометрии.')
 
     @Slot(int, str, str)
     def styleClass(self, identity, name, encoded):
@@ -724,10 +923,12 @@ class WorkspaceBackend(Backend):
         try:
             style = validate_style(json.loads(encoded))
             doc = self.document.clone()
+            if not 1<=identity<=len(doc.classes):raise ValueError('Группа не найдена.')
             item = doc.classes[identity-1]
             item['name'], item['style'] = name.strip() or item['name'], style
-            self.record_undo(None)
-            self.task('rebuild', build_workspace, doc, self.temp.name)
+            if len(item['name'])>200:raise ValueError('Название группы не должно превышать 200 символов.')
+            doc.manual=_copy_result(self.result)
+            self._group_change(doc,'Оформление группы обновлено.',identity)
         except (ValueError, IndexError, TypeError) as exc:
             self.notify(error=True, status=str(exc))
 
@@ -738,16 +939,19 @@ class WorkspaceBackend(Backend):
         for s in self.document.sheets:
             if s.result:
                 mappings.extend(dict(sheet=s.id, sheetName=s.name, group=local, classId=cid,
-                    color='#%02x%02x%02x' % tuple(s.result.colors[local-1])) for local, cid in s.groups.items())
+                    color='#%02x%02x%02x' % tuple(s.result.colors[local-1]),
+                    matched=f'{s.id}:{local}' in self.document.settings.get('matched_groups',[])) for local, cid in s.groups.items())
         self.notify(sheets=[dict(id=s.id, name=s.name, path=s.raster.path, visible=s.visible, locked=s.locked,
                                 processed=s.result is not None, polygons=len(s.result.features) if s.result else 0) for s in self.document.sheets],
                     activeSheet=self.document.active_sheet, projectClasses=copy.deepcopy(self.document.classes),
+                    smoothScanSeams=self.document.settings.get('smooth_scan_seams',True),
                     classMappings=mappings, lineTypes=copy.deepcopy(self.document.line_types), lineCount=len(self.document.lines),
                     lineFields=copy.deepcopy(self.document.line_fields), linesUrl=self.url('lines.png') if self.document.lines else '',
                     layoutTemplates=[dict(name=l['name'], index=i) for i, l in enumerate(self.document.layouts)],
                     summary=self.document.summary(self.result) if self.result is not None else {},
                     fitBounds=list(transform_geometry(self.raster.area,~self.raster.transform).bounds) if self.raster is not None and self.document.area is not None else [],
-                    stitching=self.document.dissolve_classes,
+                    stitching=False,hiddenClassIds=self.document.settings.get('hidden_classes',[]),
+                    drawClassId=self.document.settings.get('draw_class',0),
                     canUndo=bool(self.undo_stack), canRedo=bool(self.redo_stack))
         valid_types = {t['id'] for t in self.document.line_types}
         self.notify(currentLineType=self.data.get('currentLineType') if self.data.get('currentLineType') in valid_types else next(iter(sorted(valid_types)), 0),
@@ -971,6 +1175,8 @@ class WorkspaceBackend(Backend):
         if self.data['busy'] or side not in ('A','B'):return
         from .group_matching import group_record,paint_groups
         try:
+            if group and f'{sheet_id}:{group}' in self.document.settings.get('matched_groups',[]):
+                raise ValueError('Эта группа уже сопоставлена. Выберите следующую несопоставленную заливку.')
             record=group_record(self.document,sheet_id,group)
             if side=='A':self.matching_a=record
             else:self.matching_b=record
@@ -984,7 +1190,8 @@ class WorkspaceBackend(Backend):
     def pickMatchingGroup(self,x,y):
         if self.raster is None or self.data['busy'] or not self.data.get('groupMatching'):return
         from .group_matching import group_at
-        record=group_at(self.document,*self.world(x,y))
+        side=self.data['matchingSide']
+        record=group_at(self.document,*self.world(x,y),(self.matching_a if side=='A' else self.matching_b).get('sheet',''))
         if record is None:
             self.notify(status='В этой точке нет распознанной группы. Выберите заливку внутри полигона.')
             return
@@ -994,27 +1201,25 @@ class WorkspaceBackend(Backend):
 
     @Slot(int,str)
     def applyMatchedGroups(self,target,name):
-        if self.data['busy'] or not self.matching_a.get('group') or not self.matching_b.get('group'):return
+        if self.data['busy']:return
         try:
             doc=self.document.clone()
-            first,second=self.matching_a,self.matching_b
-            if name.strip():target=0
-            doc.assign_group(first['sheet'],first['group'],target,name)
-            target=doc.sheet(first['sheet']).groups[first['group']]
-            doc.assign_group(second['sheet'],second['group'],target)
-            self.record_undo(None)
-            self.rebuild_note='Группы сопоставлены. Выберите следующую пару или нажмите «Сшить границы листов».'
+            doc.manual=_copy_result(self.result)
+            records=[r for r in (self.matching_a,self.matching_b) if r.get('group')]
+            if not records:return
+            from .groups import match_groups
+            target=match_groups(doc,records,target,name)
+            from .group_matching import group_record
+            self.matching_a=group_record(doc,self.matching_a.get('sheet',''))
+            self.matching_b=group_record(doc,self.matching_b.get('sheet',''))
             self.matching_apply=True
-            self.task('rebuild',build_workspace,doc,self.temp.name)
+            self.notify(matchingSide='A',matchingA=self.matching_a,matchingB=self.matching_b,matchingUrl='')
+            self._group_change(doc,'Группы сопоставлены. Дубликаты удалены, обработанные заливки скрыты из списка.',target)
         except ValueError as exc:self.notify(error=True,status=str(exc))
 
     @Slot()
     def stitchMatchedGroups(self):
-        if self.data['busy'] or not self.document.sheets:return
-        doc=self.document.clone();doc.dissolve_classes=True
-        self.record_undo(None)
-        self.rebuild_note='Соприкасающиеся полигоны одинаковых классов сшиты. Проверить контуры можно с отключёнными исходниками в слоях.'
-        self.task('rebuild',build_workspace,doc,self.temp.name)
+        self.stitchClasses(False)
 
     @Slot(str)
     def restoreCheckpoint(self, path):
@@ -1557,6 +1762,8 @@ class WorkspaceBackend(Backend):
         if self.raster is None or width <= 0 or height <= 0:
             return
         bounds = [*self.world(x, y+height), *self.world(x+width, y)]
+        self.detail_tiles.request(bounds,pixels_w,pixels_h)
+        self.publish_detail_tiles()
         ratio = min(1., 2400/max(1, pixels_w, pixels_h), math.sqrt(4_000_000/max(1, pixels_w*pixels_h)))
         w, h = max(1, round(pixels_w*ratio)), max(1, round(pixels_h*ratio))
         key = (tuple(bounds), w, h, self.edit_revision, id(self.raster))
@@ -1566,7 +1773,15 @@ class WorkspaceBackend(Backend):
         self.detail_pending = (key, self.document.clone(), _copy_result(self.result), bounds, w, h, dict(x=x,y=y,w=width,h=height))
         self.poll_detail()
 
+    def publish_detail_tiles(self):
+        rows=self.detail_tiles.rows()
+        if rows!=self.data.get('detailTiles',[]):
+            values=dict(detailTiles=rows)
+            if rows:values.update(detailUrl=rows[-1]['url'],detailRect={k:rows[-1][k] for k in ('x','y','w','h')})
+            self.notify(**values)
+
     def poll_detail(self):
+        if hasattr(self,'detail_tiles') and self.detail_tiles.pump():self.publish_detail_tiles()
         if self.detail_future is not None and self.detail_future.done():
             future, self.detail_future = self.detail_future, None
             try:
@@ -1585,10 +1800,73 @@ class WorkspaceBackend(Backend):
             item, self.detail_pending = self.detail_pending, None
             self.detail_running = item
             _, doc, result, bounds, w, h, _ = item
-            self.detail_future = self.detail_pool.submit(viewport_images, doc, result, bounds, w, h)
+            self.detail_future = self.detail_pool.submit(viewport_images, doc, result, bounds, w, h,True)
 
     def close_details(self):
+        self.setCompareShortcutEnabled(False)
         self.detail_pool.shutdown(wait=True, cancel_futures=True)
+        self.update_cancel.set()
+        self.update_pool.shutdown(wait=False,cancel_futures=True)
+
+    @Slot()
+    def checkUpdates(self):
+        if self.update_future is not None:return
+        from .updates import check_updates
+        from . import __version__
+        self.update_release=None;self.update_kind='check'
+        self.notify(updateState='checking',updateMessage='Проверяю выпуски…',updateProgress=0,updateNotes='')
+        self.update_future=self.update_pool.submit(check_updates,__version__)
+
+    @Slot()
+    def downloadUpdate(self):
+        if self.update_future is not None or not self.update_release:return
+        from .updates import download_update
+        from PySide6.QtCore import QStandardPaths
+        self.update_cancel.clear();self.update_progress=(0,self.update_release['size']);self.update_kind='download'
+        folder=Path(QStandardPaths.writableLocation(QStandardPaths.CacheLocation))/'updates'
+        self.notify(updateState='downloading',updateMessage='Загружаю установщик…',updateProgress=0)
+        def progress(done,total):self.update_progress=(done,total)
+        self.update_future=self.update_pool.submit(download_update,self.update_release,folder,progress,self.update_cancel)
+
+    @Slot()
+    def cancelUpdateDownload(self):
+        self.update_cancel.set()
+
+    def poll_updates(self):
+        future=self.update_future
+        if future is None:return
+        if self.data.get('updateState')=='downloading':
+            done,total=self.update_progress;percent=round(done/max(1,total)*100)
+            if percent!=self.data.get('updateProgress'):self.notify(updateProgress=percent)
+        if not future.done():return
+        self.update_future=None
+        try:
+            result=future.result()
+            if self.update_kind=='check':
+                self.update_release=result if result['state']=='available' else None
+                self.notify(updateState=result['state'],updateMessage=result['message'],updateVersion=result.get('version',''),updateNotes=result.get('notes',''))
+            else:
+                self.update_release=result
+                self.notify(updateState='ready',updateProgress=100,updateMessage='Установщик загружен и проверен. Перед обновлением сохраните работу.')
+        except Exception as exc:
+            from .updates import DownloadCancelled
+            self.notify(updateState='available' if isinstance(exc,DownloadCancelled) and self.update_release else 'error',updateMessage=str(exc))
+
+    @Slot(result=bool)
+    def launchUpdate(self):
+        if self.data['busy'] or self.data.get('updateState')!='ready':return False
+        try:
+            from .updates import launch_installer
+            launch_installer(self.update_release)
+            return True
+        except Exception as exc:
+            self.notify(updateState='error',updateMessage=str(exc));return False
+
+    @Slot()
+    def openReleasePage(self):
+        from .updates import RELEASES
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl(RELEASES))
 
     @Slot(str, result=bool)
     def removeLineField(self, key):
@@ -1619,6 +1897,9 @@ class WorkspaceBackend(Backend):
         if self.data.get('polygonsLocked') and kind in ('geometry', 'drag', 'merge_direct', 'apply', 'segment', 'auto_preview'):
             self.notify(error=True, status='Слой полигонов заблокирован. Разблокируйте его в слоях.')
             return
+        from .app import edit_job
+        if function is edit_job:
+            args=tuple(args)+(None,)*(7-len(args))+(True,)
         super().start(kind, function, *args)
 
     def polygon_locked(self):

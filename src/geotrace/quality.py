@@ -647,6 +647,11 @@ def segment_prepared(prepared, groups=None, folder=None):
             pixel_polygons.append(part)
             classes.append(int(class_lookup[int(oid)]))
     pixel_polygons,simplified=simplify_partition(pixel_polygons,prepared.scale)
+    checkpoint(folder,'Сглаживаю общие границы…',86)
+    from .smoothing import smooth_partition
+    native=min(r.rgb.shape[1]/r.source_size[0],r.rgb.shape[0]/r.source_size[1])
+    pixel_polygons,smoothing=smooth_partition(pixel_polygons,native,check=lambda:checkpoint(folder,'Сглаживаю общие границы…',86))
+    simplified=bool(simplified or smoothing['changed'])
     features=[]
     for oid,(part,cls) in enumerate(zip(pixel_polygons,classes),1):
         geometry=transform_geometry(part,r.transform)
@@ -662,7 +667,7 @@ def segment_prepared(prepared, groups=None, folder=None):
     uncertain_share=round(float(uncertainty.sum()/valid.sum()*100),1)
     checkpoint(folder, 'Контуры построены', 88)
     return Result(r,class_image,features,colors),dict(contact_checks=contact_checks,uncertain_share=uncertain_share,groups=len(set(groups)-{0}),
-        pixels=int(valid.sum()),source_note=prepared.source_note, simplified=simplified)
+        pixels=int(valid.sum()),source_note=prepared.source_note, simplified=simplified,smoothing=smoothing)
 
 
 def simplify_partition(polygons,scale):

@@ -19,7 +19,7 @@ from .region import polygon_parts
 from .spatial import DISPLAY_CRS, local_scale, measurements
 
 
-def preview_overlay(document, result, path, lines_path=None):
+def preview_overlay(document, result, path, lines_path=None, outlines=False):
     raster = result.raster
     w, h = raster.valid.shape[1], raster.valid.shape[0]
     # One rasterisation avoids allocating/compositing a full-page image for each
@@ -29,18 +29,24 @@ def preview_overlay(document, result, path, lines_path=None):
         style=cls['style']
         lookup[cls['id'],:3]=list(bytes.fromhex(style['fill'][1:]))
         lookup[cls['id'],3]=round(255*style['opacity'])
+    for cid in document.settings.get('hidden_classes', []):
+        if 0 < cid < len(lookup):
+            lookup[cid, 3] = 0
     labels=rasterize([(f['geometry'],f['properties']['class_id']) for f in result.features],
                      out_shape=(h,w),transform=raster.transform,dtype='uint16') if result.features else np.zeros((h,w),np.uint16)
     labels[~raster.valid]=0
     image = Image.fromarray(lookup[labels])
     inverse = ~raster.transform
     draw=ImageDraw.Draw(image)
-    for feature in result.features:
+    from .sheet_seams import technical_boundaries
+    cuts=technical_boundaries(document,result) if outlines else {}
+    for index,feature in enumerate(result.features if outlines else []):
         cls = document.classes[feature['properties']['class_id']-1]
         style = cls['style']
-        for part in polygon_parts(feature['geometry']):
-            for ring in [part.exterior, *part.interiors]:
-                draw.line([inverse*p for p in ring.coords], fill=style['outline'], width=max(1, round(style['width'])))
+        boundary=feature['geometry'].boundary
+        if index in cuts:boundary=boundary.difference(cuts[index])
+        for line in line_parts(boundary):
+            draw.line([inverse*p for p in line.coords], fill=style['outline'], width=max(1, round(style['width'])))
     image.save(path)
     if lines_path is not None:
         lines = Image.new('RGBA', (w, h))
@@ -84,6 +90,7 @@ def map_image(document, bounds, width, height, detailed=False, only_sheet=None):
     rgb = np.full((height, width, 3), 255, np.uint8)
     alpha = np.zeros((height, width), np.uint8)
     sheets = document.sheets if only_sheet is None else [document.sheet(only_sheet)]
+    sources = {}
     for sheet in sheets:
         if sheet is None or (only_sheet is None and not sheet.visible):
             continue
@@ -93,6 +100,7 @@ def map_image(document, bounds, width, height, detailed=False, only_sheet=None):
             raster = source_window(raster, bounds, side=min(6000, max(width, height)*2))
             if raster is None:
                 continue
+        sources[sheet.id] = raster
         mask = np.zeros((height, width), np.uint8)
         reproject(raster.valid.astype(np.uint8)*255, mask, src_transform=raster.transform, src_crs=raster.crs_wkt,
                   dst_transform=affine, dst_crs=DISPLAY_CRS, resampling=Resampling.nearest, num_threads=1)
@@ -107,6 +115,9 @@ def map_image(document, bounds, width, height, detailed=False, only_sheet=None):
             np.divide(band,coverage,out=band,where=coverage>0)
             rgb[:, :, channel][mask > 0] = band[mask > 0].clip(0,255).round().astype('uint8')
         alpha[mask > 0] = 255
+    if only_sheet is None:
+        from .sheet_seams import smooth_scan_seams
+        smooth_scan_seams(document, rgb, alpha, affine, sources)
     if document.area is not None:
         alpha *= rasterize([(document.area, 1)], out_shape=(height, width), transform=affine, dtype='uint8')
     return Image.fromarray(np.dstack((rgb, alpha)))
@@ -213,13 +224,22 @@ def layout_svg(document, result, settings, preview=False):
         image.save(buffer, format='PNG')
         content.append(f'<image x="{margin}" y="{top}" width="{mw}" height="{mh}" preserveAspectRatio="none" xlink:href="data:image/png;base64,{b64encode(buffer.getvalue()).decode()}"/>')
     visible = box(*bounds)
+    hidden = set(document.settings.get('hidden_classes', []))
     if settings['polygons']:
-        for f in result.features:
+        from .sheet_seams import technical_boundaries
+        cuts=technical_boundaries(document,result)
+        for index,f in enumerate(result.features):
+            if f['properties']['class_id'] in hidden:
+                continue
             if not f['geometry'].intersects(visible):
                 continue
             style = document.classes[f['properties']['class_id']-1]['style']
             for p in polygon_parts(f['geometry'].intersection(visible)):
-                content.append(f'<path d="{path(p)}" fill="{style["fill"]}" fill-opacity="{style["opacity"]}" stroke="{style["outline"]}" stroke-width="{style["width"]*.5}" fill-rule="evenodd"/>')
+                content.append(f'<path d="{path(p)}" fill="{style["fill"]}" fill-opacity="{style["opacity"]}" stroke="none" fill-rule="evenodd"/>')
+            boundary=f['geometry'].boundary
+            if index in cuts:boundary=boundary.difference(cuts[index])
+            for line in line_parts(boundary.intersection(visible)):
+                content.append(f'<path d="{path(line)}" fill="none" stroke="{style["outline"]}" stroke-width="{style["width"]*.5}"/>')
     if settings['lines']:
         types = {t['id']: t for t in document.line_types}
         for f in document.clipped_lines():
@@ -234,6 +254,8 @@ def layout_svg(document, result, settings, preview=False):
     field = settings['labels']
     if field or any(c['style'].get('label') for c in document.classes):
         for f in sorted(result.features, key=lambda f: -f['geometry'].area):
+            if f['properties']['class_id'] in hidden:
+                continue
             point = f['geometry'].intersection(visible).representative_point()
             if point.is_empty:
                 continue
@@ -280,6 +302,8 @@ def layout_svg(document, result, settings, preview=False):
         content.append(text(x-3, y+16, 'N', 9))
     entries = []
     for cid in settings['class_ids']:
+        if cid in hidden:
+            continue
         cls = document.classes[cid-1]
         if settings['legend_field'] == 'class_name':
             label = cls['name']

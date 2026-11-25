@@ -130,6 +130,8 @@ def merge_polygons(result, object_ids):
         if len(members) < 2:
             continue
         geometry = unary_union([geometries[i] for i in members])
+        from .topology import clean_numeric_interiors
+        geometry = clean_numeric_interiors(geometry, result.raster.transform)
         pixel = transform_geometry(geometry, inverse)
         if geometry.geom_type != 'Polygon' or not geometry.is_valid or geometry.is_empty:
             raise ValueError('Объединение создаёт некорректный полигон.')
@@ -168,7 +170,7 @@ def lasso_indices(result, tree, points):
 def _result_from_features(raster, features, colors, fields=None):
     features.sort(key=lambda f: f['properties']['object_id'])
     labels = rasterize([(f['geometry'], f['properties']['class_id']) for f in features],
-                       out_shape=raster.valid.shape, transform=raster.transform, dtype='uint16')
+                       out_shape=raster.valid.shape, transform=raster.transform, dtype='uint16') if features else np.zeros(raster.valid.shape,np.uint16)
     labels[~raster.valid] = 0
     return Result(raster, labels, features, colors, fields or [])
 
@@ -180,8 +182,8 @@ def _valid_footprint(raster):
     return transform_geometry(footprint(raster), ~raster.transform)
 
 
-def draw_polygon(raster, result, points):
-    """Add an object only to unmapped valid space; never erase existing work."""
+def draw_polygon(raster, result, points, class_id=None):
+    """Insert a polygon and cut its exact outline from every intersected object."""
     from shapely.geometry import Polygon
     if len(points) < 3 or len(points) > 256 or not np.isfinite(np.asarray(points)).all():
         raise ValueError('Для нового полигона нужны от 3 до 256 точек.')
@@ -193,20 +195,35 @@ def draw_polygon(raster, result, points):
     geometry = transform_geometry(polygon, raster.transform)
     features = [dict(geometry=f['geometry'], properties=f['properties'].copy())
                 for f in result.features] if result else []
-    from shapely.strtree import STRtree
-    if features:
-        geometries = [f['geometry'] for f in features]
-        hits = STRtree(geometries).query(geometry, predicate='intersects')
-        if any(geometry.intersection(geometries[i]).area > abs(raster.transform.determinant)*1e-7 for i in hits):
-            raise ValueError('Место уже занято полигоном. Используйте разделение или правку границы.')
     next_id = max((f['properties']['object_id'] for f in features), default=0) + 1
     colors = [list(c) for c in result.colors] if result else []
     previous = next((f for f in features if f['properties']['origin'] == 'manual_draw'), None)
-    if previous:
+    if class_id:
+        if type(class_id) is not int or not 1 <= class_id <= len(colors):
+            raise ValueError('Выберите существующую группу нового полигона.')
+    elif previous:
         class_id = previous['properties']['class_id']
     else:
         colors.append([75, 183, 168])
         class_id = len(colors)
+    from shapely.strtree import STRtree
+    from .region import polygon_parts
+    from .topology import clean_numeric_interiors
+    geometries = [f['geometry'] for f in features]
+    hits = set(map(int, STRtree(geometries).query(geometry, predicate='intersects'))) if features else set()
+    cut = []
+    for index, feature in enumerate(features):
+        if index not in hits or feature['geometry'].intersection(geometry).area <= abs(raster.transform.determinant)*1e-10:
+            cut.append(feature)
+            continue
+        remainder = sorted(polygon_parts(feature['geometry'].difference(geometry)), key=lambda p: p.area, reverse=True)
+        for number, piece in enumerate(remainder):
+            props = dict(feature['properties'], review='edited', origin='manual_draw_cut')
+            if number:
+                props['object_id'] = next_id
+                next_id += 1
+            cut.append(dict(geometry=clean_numeric_interiors(piece, raster.transform), properties=props))
+    features = cut
     if next_id > 2147483646 or len(colors) > 65534:
         raise ValueError('Достигнут предел объектов или групп.')
     features.append(dict(geometry=geometry, properties=dict(object_id=next_id, class_id=class_id,

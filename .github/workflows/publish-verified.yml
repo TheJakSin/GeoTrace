@@ -28,15 +28,16 @@ jobs:
         run: |
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/jobs?per_page=100&filter=all" > verified-jobs.json
           python3 - <<'PY'
-          import json,os,tomllib
+          import json,os,tomllib,re
           from pathlib import Path
           jobs=json.loads(Path('verified-jobs.json').read_text())['jobs']
           required={'test (windows-latest)','test (macos-15)','test (macos-15-intel)','documents'}
           latest={j['name']:j for j in sorted(jobs,key=lambda j:j['id']) if j['name'] in required}
           assert set(latest)==required and all(j['conclusion']=='success' for j in latest.values()),'Native verification is incomplete'
           version=tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
-          assert version=='1.0.0'
-          with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('VERSION='+version+'\n')
+          assert re.fullmatch(r'\d+\.\d+\.\d+',version)
+          series='.'.join(version.split('.')[:2])
+          with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('VERSION='+version+'\nDOC_SERIES='+series+'\n')
           PY
       - uses: actions/download-artifact@v4
         with:
@@ -63,12 +64,14 @@ jobs:
           for f in reports:
               r=json.loads(f.read_text());assert r['ok'] and r['browser_renderer'] and r['geopackage'] and r['pdf'],f.name
               assert r['build']['number']==number and r['build']['commit']==sha and r['version']==os.environ['VERSION'],f.name
+          series=os.environ['DOC_SERIES'];version=os.environ['VERSION'];docs=Path('docs')/('release-'+series)
+          if not docs.is_dir():docs=Path('docs/release')
           for original,label in [('Руководство','User-Guide'),('Возможности','Overview')]:
               for ext in ('docx','pdf'):
-                  name=f'GeoTrace-1.0-{original}.{ext}';file=p/name;source=Path('docs/release')/name
+                  name=f'GeoTrace-{series}-{original}.{ext}';file=p/name;source=docs/name
                   assert hashlib.sha256(file.read_bytes()).digest()==hashlib.sha256(source.read_bytes()).digest(),name
-                  file.rename(p/f'GeoTrace-1.0-{label}.{ext}')
-          for name in (f'GeoTrace-1.0.0-build{number}-Windows-x64-Setup.exe',f'GeoTrace-1.0.0-build{number}-Windows-x64.zip',f'GeoTrace-1.0.0-build{number}-macOS-arm64.pkg',f'GeoTrace-1.0.0-build{number}-macOS-arm64.zip',f'GeoTrace-1.0.0-build{number}-macOS-x86_64.pkg',f'GeoTrace-1.0.0-build{number}-macOS-x86_64.zip'):
+                  file.rename(p/f'GeoTrace-{series}-{label}.{ext}')
+          for name in (f'GeoTrace-{version}-build{number}-Windows-x64-Setup.exe',f'GeoTrace-{version}-build{number}-Windows-x64.zip',f'GeoTrace-{version}-build{number}-macOS-arm64.pkg',f'GeoTrace-{version}-build{number}-macOS-arm64.zip',f'GeoTrace-{version}-build{number}-macOS-x86_64.pkg',f'GeoTrace-{version}-build{number}-macOS-x86_64.zip'):
               assert (p/name).stat().st_size>1000000,name
           (p/'SHA256SUMS.txt').unlink(missing_ok=True)
           sums=[]
@@ -82,7 +85,7 @@ jobs:
         shell: bash
         run: |
           tag="v$VERSION"
-          cp docs/RELEASE_1_0.md release-notes.md
+          cp "docs/RELEASE_${DOC_SERIES/./_}.md" release-notes.md
           echo "" >> release-notes.md
           echo "Checks native build $SOURCE_BUILD · $SOURCE_SHA" >> release-notes.md
           gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > releases.json
@@ -101,7 +104,7 @@ jobs:
               gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset"
             done < malformed-assets.txt
           else
-            gh release create "$tag" --target "$SOURCE_SHA" --title "GeoTrace 1.0.0 · build $SOURCE_BUILD" --notes-file release-notes.md --draft
+            gh release create "$tag" --target "$SOURCE_SHA" --title "GeoTrace $VERSION · build $SOURCE_BUILD" --notes-file release-notes.md --draft
             gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$tag\") | .id" > release-id.txt
           fi
           release_id=$(cat release-id.txt)
@@ -117,5 +120,5 @@ jobs:
                   with f.open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
                   assert assets[f.name]['digest']=='sha256:'+digest,f.name
           PY
-          gh release edit "$tag" --title "GeoTrace 1.0.0 · build $SOURCE_BUILD" --notes-file release-notes.md --draft=false --latest
+          gh release edit "$tag" --title "GeoTrace $VERSION · build $SOURCE_BUILD" --notes-file release-notes.md --draft=false --latest
           gh release view "$tag" --json url,assets

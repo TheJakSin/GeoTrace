@@ -34,7 +34,7 @@ def test_layout_worker_view_detail_continuation_and_layer_lock(tmp_path):
         b._install(build_workspace(two_sheets(),b.temp.name),fit=True)
         b.requestDetail(0,0,b.data['width'],b.data['height'],500,300)
         wait(lambda:bool(b.data['detailUrl']))
-        assert b.data['detailUrl'].startswith('data:image/png;base64,')
+        assert b.data['detailTiles'] and all(row['url'].startswith('file:') for row in b.data['detailTiles'])
         options=b.defaultLayout();options.update(raster=False,dpi=72)
         b.previewLayout(json.dumps(options));wait(lambda:not b.data['busy'])
         assert not b.data['error'],b.data['status']

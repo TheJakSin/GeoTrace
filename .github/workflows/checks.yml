@@ -23,7 +23,7 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install -e ".[dev,packaging]"
       - run: python -m pytest -q tests/test_raster_colors.py
-      - run: python -m pytest -q
+      - run: python tools/check_suite.py
       - name: Stamp build identity
         run: python tools/write_build_info.py --number ${{ github.run_number }} --commit ${{ github.sha }} --run-url https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
       - id: version
@@ -43,6 +43,25 @@ jobs:
           $destination = Join-Path $env:RUNNER_TEMP 'GeoTraceInstalled'
           $process = Start-Process $setup.FullName -ArgumentList @('/S', "/D=$destination") -PassThru -Wait
           if ($process.ExitCode -ne 0) { throw 'Installer failed' }
+          # Exercise repair/update, removal of omitted old libraries and the
+          # previous per-user installation, without launching its uninstaller.
+          $legacy = Join-Path $env:LOCALAPPDATA 'Programs/GeoTraceLegacyCheck'
+          New-Item -ItemType Directory -Force "$legacy/_internal" | Out-Null
+          Copy-Item "$destination/GeoTrace.exe" "$legacy/GeoTrace.exe"
+          Set-Content "$legacy/Uninstall.exe" 'not executed'
+          Set-Content "$legacy/project.geotrace" 'preserve project'
+          Set-Content "$destination/_internal/obsolete-update-check.txt" 'remove old payload'
+          New-Item -Path 'HKCU:/Software/GeoTrace' -Force | Out-Null
+          New-ItemProperty -Path 'HKCU:/Software/GeoTrace' -Name InstallDir -Value $legacy -PropertyType String -Force | Out-Null
+          New-Item -Path 'HKCU:/Software/GeoTrace/GeoTrace' -Force | Out-Null
+          New-ItemProperty -Path 'HKCU:/Software/GeoTrace/GeoTrace' -Name UpgradeSentinel -Value 'preserve settings' -PropertyType String -Force | Out-Null
+          $upgrade = Start-Process $setup.FullName -ArgumentList @('/S', "/D=$destination") -PassThru -Wait
+          if ($upgrade.ExitCode -ne 0) { throw 'Upgrade failed' }
+          if (Test-Path "$destination/_internal/obsolete-update-check.txt") { throw 'Old libraries survived upgrade' }
+          if (Test-Path "$legacy/GeoTrace.exe") { throw 'Per-user application was not migrated' }
+          if (!(Test-Path "$legacy/project.geotrace")) { throw 'Project was removed during migration' }
+          if ((Get-ItemPropertyValue -Path 'HKCU:/Software/GeoTrace/GeoTrace' -Name UpgradeSentinel) -ne 'preserve settings') { throw 'Settings were removed' }
+          if ((Get-ItemPropertyValue -Path 'HKLM:/Software/GeoTrace' -Name InstallDir) -ne $destination) { throw 'Machine registration is missing' }
           python tools/smoke_frozen.py "$destination/GeoTrace.exe" --report dist/desktop/installed-Windows.json
           if ($LASTEXITCODE -ne 0) { throw 'Installed application check failed' }
       - name: Check macOS installer payload
@@ -50,6 +69,14 @@ jobs:
         shell: bash
         run: |
           sudo installer -pkg dist/desktop/*.pkg -target /
+          # Mimic an older bundle and a file omitted by the new version. The
+          # next installation must replace the whole bundle and restore signing.
+          sudo /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.0.1' /Applications/GeoTrace.app/Contents/Info.plist
+          sudo /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 0' /Applications/GeoTrace.app/Contents/Info.plist
+          sudo touch /Applications/GeoTrace.app/Contents/Resources/obsolete-update-check.txt
+          sudo installer -pkg dist/desktop/*.pkg -target /
+          test ! -e /Applications/GeoTrace.app/Contents/Resources/obsolete-update-check.txt
+          codesign --verify --deep --strict /Applications/GeoTrace.app
           python tools/smoke_frozen.py /Applications/GeoTrace.app/Contents/MacOS/GeoTrace --report dist/desktop/installed-${{ matrix.os }}.json
       - uses: actions/upload-artifact@v4
         with:
@@ -82,12 +109,7 @@ jobs:
       - name: Use visually checked release documents
         shell: bash
         run: |
-          cd docs/release
-          sha256sum -c SHA256SUMS.txt
-          cd ../..
-          python3 -c "import hashlib,json; from pathlib import Path; p=Path('docs'); m=json.loads((p/'release/sources.json').read_text()); assert all(hashlib.sha256((p/n).read_bytes()).hexdigest()==v for n,v in m.items()), 'Regenerate and visually review documents after source changes'"
-          mkdir -p dist/documents
-          cp docs/release/*.docx docs/release/*.pdf dist/documents/
+          python3 tools/check_user_documents.py --output dist/documents
       - uses: actions/upload-artifact@v4
         with:
           name: user-documents

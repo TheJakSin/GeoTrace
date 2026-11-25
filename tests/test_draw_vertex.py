@@ -17,15 +17,17 @@ def objects(polygons):
     return Result(raster,np.zeros(raster.valid.shape,dtype='uint16'),features,[[75,183,168]])
 
 
-def test_draw_without_segmentation_roundtrip_and_reject_overlap(tmp_path):
+def test_draw_without_segmentation_roundtrip_and_replace_overlap(tmp_path):
     raster=sample()
     result=draw_polygon(raster,None,[(5,5),(15,5),(15,15),(5,15)])
     assert len(result.features)==1 and result.features[0]['properties']['origin']=='manual_draw'
     next_result=draw_polygon(raster,result,[(15,5),(19,5),(19,15),(15,15)])
     assert len(next_result.features)==2 and len(next_result.colors)==1
     assert next_result.features[0]['geometry'].equals_exact(result.features[0]['geometry'],0)
-    with pytest.raises(ValueError,match='занято'):
-        draw_polygon(raster,result,[(10,10),(18,10),(18,18),(10,18)])
+    replaced=draw_polygon(raster,result,[(10,10),(18,10),(18,18),(10,18)])
+    assert len(replaced.features)==2
+    assert replaced.features[0]['geometry'].intersection(replaced.features[1]['geometry']).area<1e-12
+    assert replaced.features[0]['properties']['origin']=='manual_draw_cut'
     path=tmp_path/'ручной.geotrace';save_project(path,raster,next_result)
     loaded=load_project(path).result
     for a,b in zip(loaded.features,next_result.features):

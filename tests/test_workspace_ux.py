@@ -19,11 +19,13 @@ from geotrace.workspace_app import WorkspaceBackend,build_workspace
 from geotrace.spatial import project_geometry
 from test_document import two_sheets
 
+_application = None
 
 @contextmanager
 def scene(tmp_path):
+    global _application
     if QQuickStyle.name()!='Basic':QQuickStyle.setStyle('Basic')
-    app=QGuiApplication.instance() or QGuiApplication([])
+    _application=QGuiApplication.instance() or _application or QGuiApplication([])
     b=WorkspaceBackend(settings=QSettings(str(tmp_path/'test.ini'),QSettings.IniFormat),recovery_dir=tmp_path/'recovery')
     b.autosave_timer.stop();engine=QQmlApplicationEngine();warnings=[]
     engine.warnings.connect(lambda rows:warnings.extend(r.toString() for r in rows))
@@ -40,6 +42,8 @@ def scene(tmp_path):
         __import__('shiboken6').delete(engine)
         b.timer.stop();b.autosave_timer.stop();b.basemap_loader.close();b.web_map.close();b.close_details()
         b.pool.shutdown(wait=True,cancel_futures=True);b.temp.cleanup()
+        __import__('shiboken6').delete(b)
+        QCoreApplication.sendPostedEvents(None,__import__('PySide6.QtCore',fromlist=['QEvent']).QEvent.DeferredDelete)
 
 
 def wait(b):
@@ -49,7 +53,7 @@ def wait(b):
     assert not b.data['busy'] and not b.data['error'],b.data['status']
 
 
-def test_matching_groups_on_map_and_explicit_stitch(tmp_path):
+def test_matching_groups_on_map_removes_duplicates_and_completed_choices(tmp_path):
     with scene(tmp_path) as (b,w,warnings):
         b.beginGroupMatching();QTest.qWait(50)
         panel=w.findChild(QQuickItem,'workspaceGroupsDialog');assert panel.isVisible()
@@ -67,9 +71,13 @@ def test_matching_groups_on_map_and_explicit_stitch(tmp_path):
         assert b.document.sheet('b').groups[b_group['group']]==cid
         before=[f for f in b.result.features if f['properties']['class_id']==cid]
         assert len(before)==2
-        assert b.data['matchingA']['classId']==b.data['matchingB']['classId']==cid
+        assert b.data['matchingA']['group']==b.data['matchingB']['group']==0
+        assert len(b.document.classes)==3
+        matched=[r for r in b.data['classMappings'] if r['matched']]
+        assert {(r['sheet'],r['group']) for r in matched}=={(a['sheet'],a['group']),(b_group['sheet'],b_group['group'])}
         b.stitchMatchedGroups();wait(b)
-        assert len([f for f in b.result.features if f['properties']['class_id']==cid])==1
+        assert len([f for f in b.result.features if f['properties']['class_id']==cid])==2
+        assert not b.document.dissolve_classes
         b.endGroupMatching();QTest.qWait(30);assert not panel.isVisible()
 
 

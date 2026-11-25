@@ -1,4 +1,5 @@
 """Build native applications and installers only after the feature/test stage."""
+import math
 import argparse
 import hashlib
 from html import escape
@@ -46,7 +47,8 @@ def branding(folder,version,number):
     wizard.resize((164,314)).save(folder/'wizard.bmp')
     header=Image.new('RGB',(300,114),'white');logo=icon.resize((80,80));header.paste(logo,(14,17),logo)
     ImageDraw.Draw(header).text((104,42),'GeoTrace',font=font(28),fill='#263445');header.resize((150,57)).save(folder/'header.bmp')
-    (folder/'version.txt').write_text("VSVersionInfo(ffi=FixedFileInfo(filevers=(1,0,0,"+str(number)+"),prodvers=(1,0,0,"+str(number)+"),mask=0x3f,flags=0,OS=0x40004,fileType=1,subtype=0,date=(0,0)),kids=[StringFileInfo([StringTable('040904B0',[StringStruct('CompanyName','TJS PRIME · TJS MERIDIAN'),StringStruct('FileDescription','GeoTrace'),StringStruct('FileVersion','"+version+" build "+str(number)+"'),StringStruct('ProductName','GeoTrace'),StringStruct('ProductVersion','"+version+"')])]),VarFileInfo([VarStruct('Translation',[1033,1200])])])",encoding='utf-8')
+    numeric=','.join(version.split('.')[:3]+[str(number)])
+    (folder/'version.txt').write_text("VSVersionInfo(ffi=FixedFileInfo(filevers=("+numeric+"),prodvers=("+numeric+"),mask=0x3f,flags=0,OS=0x40004,fileType=1,subtype=0,date=(0,0)),kids=[StringFileInfo([StringTable('040904B0',[StringStruct('CompanyName','TJS PRIME · TJS MERIDIAN'),StringStruct('FileDescription','GeoTrace'),StringStruct('FileVersion','"+version+" build "+str(number)+"'),StringStruct('ProductName','GeoTrace'),StringStruct('ProductVersion','"+version+"')])]),VarFileInfo([VarStruct('Translation',[1033,1200])])])",encoding='utf-8')
 
 
 def manual(folder):
@@ -56,6 +58,8 @@ def manual(folder):
     html=markdown.markdown(source,extensions=['tables','fenced_code','toc'])
     style='body{max-width:950px;margin:40px auto;padding:0 24px;font:16px/1.65 Arial,sans-serif;color:#303944}h1,h2,h3{color:#263445;line-height:1.3}a{color:#356ac3}table{border-collapse:collapse;width:100%}th,td{padding:8px;border:1px solid #dce0e6;text-align:left}pre{background:#f1f3f6;padding:16px;overflow:auto}img{max-width:100%}'
     (folder/'USER_GUIDE.html').write_text('<!doctype html><html lang="ru"><meta charset="utf-8"><title>GeoTrace — руководство</title><style>'+style+'</style><body>'+html+'</body></html>',encoding='utf-8')
+    images=ROOT/'docs/images'
+    if images.is_dir():shutil.copytree(images,folder/'images',dirs_exist_ok=True)
 
 
 def notices(folder):
@@ -145,7 +149,8 @@ def main():
         run('ditto','-c','-k','--sequesterRsrc','--keepParent',app,out/(stem+'.zip'))
     else:
         nsis=shutil.which('makensis') or str(Path(os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)'))/'NSIS/makensis.exe')
-        run(nsis,'/INPUTCHARSET','UTF8',f'/DVERSION={version}',f'/DBUILD={number}',f'/DOUTPUT={out/(stem+"-Setup.exe")}',f'/DAPPDIR={app}',f'/DASSETS={assets}',ROOT/'packaging/windows.nsi')
+        payload_kb=math.ceil(sum(p.stat().st_size for p in app.rglob('*') if p.is_file())/1024)
+        run(nsis,'/INPUTCHARSET','UTF8',f'/DPAYLOAD_KB={payload_kb}',f'/DVERSION={version}',f'/DBUILD={number}',f'/DOUTPUT={out/(stem+"-Setup.exe")}',f'/DAPPDIR={app}',f'/DASSETS={assets}',ROOT/'packaging/windows.nsi')
         shutil.make_archive(str(out/stem),'zip',root_dir=app.parent,base_dir=app.name)
     checksums=[]
     for path in sorted(out.iterdir()):

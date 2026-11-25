@@ -112,9 +112,12 @@ class Document:
         sheet = self.sheet(identity)
         if sheet is None:
             raise ValueError('Лист не найден.')
+        if sheet.result is not None and sheet.result.colors != result.colors:
+            self.settings['matched_groups']=[key for key in self.settings.get('matched_groups',[]) if not key.startswith(sheet.id+':')]
         sheet.result = result
+        sheet.groups={local:cid for local,cid in sheet.groups.items() if 1<=local<=len(result.colors)}
         for local, rgb in enumerate(result.colors, 1):
-            if local not in sheet.groups:
+            if not sheet.groups.get(local):
                 cid = len(self.classes)+1
                 color = '#%02x%02x%02x' % tuple(rgb)
                 self.classes.append(dict(id=cid, name=f'{sheet.name} · группа {local}'[:200],
@@ -169,6 +172,8 @@ class Document:
                           src_crs=source.crs_wkt, dst_transform=affine, dst_crs=DISPLAY_CRS,
                           resampling=Resampling.bilinear, num_threads=1)
                 rgb[:, :, channel][mask > 0] = pixels[mask > 0]
+        from .sheet_seams import smooth_scan_seams
+        smooth_scan_seams(self, rgb, valid, affine)
         raster = Raster('', rgb, valid, affine, CRS.from_string(DISPLAY_CRS).to_wkt(), DISPLAY_CRS, (w, h))
         # The overview grid is only a display cache. Keep the exact transformed
         # footprint for edits; centre-sampled pixels alone lose thin edge belts.
@@ -191,6 +196,7 @@ class Document:
             current = []
             frame = sheet.footprint()
             for feature in sheet.result.features:
+                if not sheet.groups.get(feature['properties']['class_id']):continue
                 geometry = project_geometry(feature['geometry'], sheet.raster.crs_wkt, densify=True)
                 if sheet.raster.area is not None:
                     geometry = geometry.intersection(frame)
@@ -444,7 +450,7 @@ def load_document(path, source_cache=None):
                     raise ValueError('Некорректное имя класса.')
                 cls['style'] = validate_style(cls['style'])
             for sheet in doc.sheets:
-                if sheet.result is not None and any(sheet.groups.get(k) not in range(1, len(doc.classes)+1)
+                if sheet.result is not None and any(sheet.groups.get(k) not in range(0, len(doc.classes)+1)
                                                       for k in range(1, len(sheet.result.colors)+1)):
                     raise ValueError('Некорректные соответствия групп.')
             doc.active_sheet = meta['active_sheet']
@@ -488,6 +494,17 @@ def load_document(path, source_cache=None):
             doc.dissolve_classes = bool(meta.get('dissolve_classes', False))
             doc.source_project = str(meta.get('source_project', ''))
             doc.settings = dict(meta.get('settings', {}))
+            if type(doc.settings.get('smooth_scan_seams',True)) is not bool:
+                raise ValueError('Некорректное отображение стыков сканов.')
+            hidden=doc.settings.get('hidden_classes',[])
+            done=doc.settings.get('matched_groups',[])
+            draw=doc.settings.get('draw_class',0)
+            if (not isinstance(hidden,list) or any(type(cid) is not int or not 1<=cid<=len(doc.classes) for cid in hidden)
+                    or not isinstance(done,list) or len(done)>65534 or any(not isinstance(key,str) or len(key)>80 for key in done)
+                    or type(draw) is not int or not 0<=draw<=len(doc.classes)):
+                raise ValueError('Некорректные настройки групп проекта.')
+            valid_done={f'{s.id}:{local}' for s in doc.sheets for local in s.groups}
+            doc.settings['matched_groups']=[key for key in done if key in valid_done]
             if any(r.get('embedded_source') for r in meta['sheets']):
                 doc.settings['portable_sources'] = True
             if 'output.geotrace' in names:
@@ -495,6 +512,12 @@ def load_document(path, source_cache=None):
                     target = Path(work)/'output.geotrace'
                     target.write_bytes(archive.read('output.geotrace'))
                     doc.manual = load_project(target).result
+                if doc.manual is not None and (len(doc.manual.colors)!=len(doc.classes) or any(not 1<=f['properties']['class_id']<=len(doc.classes) for f in doc.manual.features)):
+                    raise ValueError('Некорректные группы выходного слоя.')
+            from .topology import clean_result_interiors
+            doc.manual = clean_result_interiors(doc.manual)
+            for sheet in doc.sheets:
+                sheet.result = clean_result_interiors(sheet.result)
             return doc
     except (OSError, KeyError, TypeError, ValueError, zipfile.BadZipFile) as exc:
         raise ValueError(f'Не удалось открыть проект участка: {exc}') from exc

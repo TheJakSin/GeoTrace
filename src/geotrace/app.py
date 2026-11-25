@@ -61,13 +61,15 @@ def area_job(raster, result, geometry, name, folder):
 
 
 def segment_job(raster, classes, minimum, folder, fields=None, previous=None):
-    result = preserve_work(change_schema(segment(raster, classes, minimum), fields or []), previous)
+    from .smoothing import smooth_automatic_result
+    result = preserve_work(change_schema(smooth_automatic_result(segment(raster, classes, minimum)), fields or []), previous)
     save_overlay(result, Path(folder) / 'overlay.png')
     return result
 
 
 def auto_job(raster, previous, classes, minimum, profile, folder):
-    result = preserve_work(segment(raster, classes, minimum, profile), previous)
+    from .smoothing import smooth_automatic_result
+    result = preserve_work(smooth_automatic_result(segment(raster, classes, minimum, profile)), previous)
     save_overlay(result, Path(folder) / 'auto-preview.png')
     return result
 
@@ -92,16 +94,16 @@ def drag_job(result, drag, dx, dy, folder):
     return output
 
 
-def edit_job(result, object_ids, operation, points, folder, raster=None):
+def edit_job(result, object_ids, operation, points, folder, raster=None, draw_class=None, vector_preview=False):
     if operation == 'draw':
-        output = draw_polygon(raster, result, points)
+        output = draw_polygon(raster, result, points, draw_class)
     elif operation == 'vertex':
         if len(object_ids) != 1:
             raise ValueError('Выберите один полигон для перемещения вершины.')
         output = move_vertex(result, object_ids[0], points)
     else:
         output = edit_geometry(result, object_ids, operation, points)
-    save_overlay(output, Path(folder) / 'edit-preview.png')
+    save_overlay(output, Path(folder) / 'edit-preview.png', outlines=not vector_preview)
     old = {f['properties']['object_id']:f for f in result.features} if result else {}
     changed_ids = [f['properties']['object_id'] for f in output.features
            if f['properties']['object_id'] not in old or not f['geometry'].equals_exact(
@@ -137,6 +139,9 @@ class Backend(QObject):
 
     def __init__(self, checkpoint=None, recovery_dir=None, settings=None):
         super().__init__()
+        self._closing=False
+        from PySide6.QtQml import QQmlEngine
+        QQmlEngine.setObjectOwnership(self,QQmlEngine.CppOwnership)
         self.temp = tempfile.TemporaryDirectory(prefix='geotrace-')
         self.pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context('spawn'))
         self.future = None
@@ -230,42 +235,19 @@ class Backend(QObject):
     def isTextInput(self, item):
         return item is not None and (item.inherits('QQuickTextInput') or item.inherits('QQuickTextEdit') or item.inherits('QQuickComboBox') or item.inherits('QQuickSpinBox'))
 
-    @Slot(bool)
-    def setCompareShortcutEnabled(self, enabled):
-        self.compare_enabled = enabled
-        self.shift_pending = False
-        application = QCoreApplication.instance()
-        if application is not None:
-            if enabled:
-                application.installEventFilter(self)
-            else:
-                application.removeEventFilter(self)
+    @Slot()
+    def prepareClose(self):
+        self._closing=True
+        self.compare_enabled=False
+        self.timer.stop();self.autosave_timer.stop()
 
-    def eventFilter(self, watched, event):
-        kind = event.type()
-        if kind == QEvent.ShortcutOverride and event.key()!=Qt.Key_Shift:
-            self.shift_used = True
-        if kind in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate):
-            self.shift_pending = False
-        if kind in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick, QEvent.TouchBegin, QEvent.Wheel):
-            self.shift_used = True
-        if kind in (QEvent.KeyPress, QEvent.KeyRelease):
-            focus = QGuiApplication.focusObject()
-            typing = self.isTextInput(focus)
-            if typing or not self.compare_enabled:
-                self.shift_pending = False
-            elif event.key() == Qt.Key_Shift and not event.isAutoRepeat():
-                if kind == QEvent.KeyPress:
-                    self.shift_pending = True
-                    self.shift_used = QGuiApplication.mouseButtons()!=Qt.NoButton or bool(event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))
-                else:
-                    activate = self.shift_pending and not self.shift_used
-                    self.shift_pending = False
-                    if activate:
-                        self.compareShortcut.emit()
-            elif kind == QEvent.KeyPress:
-                self.shift_used = True
-        return super().eventFilter(watched,event)
+    @Slot(bool)
+    def setCompareShortcutEnabled(self,enabled):
+        self.compare_enabled=enabled
+
+    @Slot()
+    def triggerCompareShortcut(self):
+        if self.compare_enabled:self.compareShortcut.emit()
 
     @Property(QObject, constant=True)
     def polygonTable(self):
@@ -280,6 +262,8 @@ class Backend(QObject):
         return self.data
 
     def notify(self, **changes):
+        import shiboken6
+        if getattr(self,'_closing',False) or not shiboken6.isValid(self):return
         if any(key in changes for key in ('rasterUrl', 'overlayUrl', 'areaUrl')):
             changes['webMapRevision'] = self.data.get('webMapRevision', 0)+1
         self.data.update(changes)
@@ -885,6 +869,7 @@ class Backend(QObject):
 
     @Slot()
     def poll(self):
+        if getattr(self,'_closing',False):return
         self.poll_basemap()
         if self.data['qualityBusy'] and not self.data['qualityCancelPending']:
             try:
@@ -1174,9 +1159,13 @@ class Backend(QObject):
             return
         gx, gy = self.raster.transform * (x, y)
         matches = self.tree.query(Point(gx, gy), predicate='intersects')
+        matches = [i for i in matches if self.feature_visible(self.result.features[int(i)])]
         self.reset_editor()
         self.selected = int(matches[0]) if len(matches) else -1
         self.refresh_selection()
+
+    def feature_visible(self, feature):
+        return True
 
     def refresh_selection(self):
         if self.selected < 0:
@@ -1314,6 +1303,7 @@ class Backend(QObject):
         if self.tree is None or self.data['busy']:
             return
         matches = self.tree.query(Point(self.raster.transform * (x,y)), predicate='intersects')
+        matches = [i for i in matches if self.feature_visible(self.result.features[int(i)])]
         if not len(matches):
             return
         index = int(matches[0])
@@ -1345,6 +1335,7 @@ class Backend(QObject):
             if len(coordinates) > 250000:
                 raise ValueError('Слишком длинный контур лассо.')
             indices = lasso_indices(self.result, self.tree, json.loads(coordinates))
+            indices = [i for i in indices if self.feature_visible(self.result.features[i])]
             if additive:
                 indices = list(self.edit_selected) + [i for i in indices if i not in self.edit_selected]
             self.set_edit_selection(indices)
@@ -1398,7 +1389,7 @@ class Backend(QObject):
         ids = [self.result.features[i]['properties']['object_id'] for i in self.edit_selected]
         self.geometry_operation = operation
         self.geometry_primary_id = ids[0] if ids else None
-        self.start('geometry', edit_job, self.result, ids, operation, list(self.edit_points), self.temp.name, self.raster)
+        self.start('geometry', edit_job, self.result, ids, operation, list(self.edit_points), self.temp.name, self.raster, self.data.get('drawClassId'))
 
     @Slot()
     def acceptGeometry(self):

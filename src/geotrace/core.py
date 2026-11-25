@@ -134,14 +134,14 @@ def save_preview(raster, path):
     Image.fromarray(rgba).save(path)
 
 
-def save_overlay(result, path):
+def save_overlay(result, path, outlines=True):
     palette = np.array([[0, 0, 0]] + result.colors, dtype=np.uint8)
     rgba = np.dstack((palette[result.labels], ((result.labels > 0) & result.raster.valid).astype(np.uint8) * 210))
     image = Image.fromarray(rgba)
     draw = ImageDraw.Draw(image)
     inverse = ~result.raster.transform
     # Geometry, rather than color-class changes, defines the visible object boundaries.
-    for feature in result.features:
+    for feature in result.features if outlines else []:
         geometry = feature['geometry']
         for ring in [geometry.exterior, *geometry.interiors]:
             draw.line([inverse * point for point in ring.coords], fill=(19,45,43,255), width=1)

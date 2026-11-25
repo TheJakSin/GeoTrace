@@ -50,8 +50,13 @@ def project_context(raster):
 def vector_context(result, document=None):
     """Yandex GeoObject coordinates use latitude, longitude (including hole rings)."""
     features = []
+    from .sheet_seams import technical_boundaries
+    from .document import line_parts
+    cuts=technical_boundaries(document,result) if document is not None else {}
     if result is not None:
-        for feature in result.features:
+        for index,feature in enumerate(result.features):
+            if document is not None and feature['properties']['class_id'] in document.settings.get('hidden_classes',[]):
+                continue
             geometry = transform_geom(result.raster.crs_wkt, 'EPSG:4326', mapping(feature['geometry']))
             def swap(coordinates):
                 if isinstance(coordinates[0], (int, float)):
@@ -64,7 +69,15 @@ def vector_context(result, document=None):
             style=cls['style'] if cls else dict(fill='#%02x%02x%02x'%tuple(rgb),outline='#184e55',width=1.4,opacity=1)
             features.append(dict(type='Feature', id=int(properties['object_id']), geometry=geometry,
                 properties=dict(kind='polygon',baseFillOpacity=style['opacity'],hintContent=f"Полигон № {properties['object_id']} · "+escape(cls['name'] if cls else f"группа {properties['class_id']}")),
-                options=dict(fillColor=style['fill'], strokeColor=style['outline'], strokeWidth=style['width'])))
+                options=dict(fillColor=style['fill'], strokeColor=style['outline'], strokeWidth=0 if index in cuts else style['width'])))
+            if index in cuts:
+                boundary=feature['geometry'].boundary.difference(cuts[index])
+                for part,line in enumerate(line_parts(boundary)):
+                    edge=transform_geom(result.raster.crs_wkt,'EPSG:4326',mapping(line))
+                    edge['coordinates']=swap(edge['coordinates'])
+                    features.append(dict(type='Feature',id=f'outline:{properties["object_id"]}:{part}',geometry=edge,
+                        properties=dict(kind='polygon_outline',baseFillOpacity=0,hintContent=f"Полигон № {properties['object_id']}"),
+                        options=dict(strokeColor=style['outline'],strokeWidth=style['width'])))
         if document is not None:
             types={t['id']:t for t in document.line_types}
             for index,f in enumerate(document.clipped_lines()):
@@ -160,7 +173,7 @@ class WebMapServer:
                 if result_changed:
                     self.vector_revision += 1
                 context.update(rasterRevision=self.raster_revision, vectorRevision=self.vector_revision,
-                               rasterAvailable=raster is not None, polygonCount=sum(f['properties'].get('kind')!='line' for f in vectors['features']),
+                               rasterAvailable=raster is not None, polygonCount=sum(f['properties'].get('kind')=='polygon' for f in vectors['features']),
                                lineCount=sum(f['properties'].get('kind')=='line' for f in vectors['features']))
                 self.raster, self.result = raster, result
                 self.style_revision=style_revision

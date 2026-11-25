@@ -17,7 +17,7 @@ Item {
     property var actions: [
         {name:"Добавить листы карты", panel:"add"}, {name:"Добавить участок KML", panel:"kml"},
         {name:"Листы проекта", panel:"sheets"}, {name:"Сопоставить группы разных листов", panel:"groups"},
-        {name:"Оформление полигонов", panel:"styles"}, {name:"Линии и разломы", panel:"lines"},
+        {name:"Группы полигонов", panel:"classes"}, {name:"Сглаживание границ",panel:"smooth"}, {name:"Проверка обновлений",panel:"updates"}, {name:"Линии и разломы", panel:"lines"},
         {name:"Проверить стыки и покрытие", panel:"seams"}, {name:"Сводка участка", panel:"summary"},
         {name:"Макет и экспорт карты", panel:"layout"}, {name:"Контрольные сохранения", panel:"checkpoints"},
         {name:"О программе", panel:"about"}
@@ -27,8 +27,12 @@ Item {
         else if(name==="kml") kmlDialog.open()
         else if(name==="sheets") sheetsDialog.open()
         else if(name==="groups") groupsDialog.open()
-        else if(name==="styles") stylesDialog.open()
+        else if(name==="classes") classManager.open()
+        else if(name==="newGroup") {classManager.open();classManager.newGroup()}
+        else if(name==="smooth") smoothPanel.open()
+        else if(name==="updates") updateDialog.open()
         else if(name==="lines") {controller.endGroupMatching();linesDialog.open()}
+        else if(name==="lineFields") lineFieldsDialog.open()
         else if(name==="lineAttributes") {if(!panels.state.lineMode)controller.setLineMode(true);appRoot.attributesPinned=true}
         else if(name==="summary") summaryDialog.open()
         else if(name==="about") aboutDialog.open()
@@ -37,9 +41,10 @@ Item {
         else if(name==="checkpoints") {controller.refreshCheckpoints();checkpointDialog.open()}
         else if(name==="layout") {layoutWindow.draft=controller.defaultLayout();layoutWindow.show()}
     }
+    function editGroup(identity){if(identity>0){stylesDialog.identity=identity;stylesDialog.open()}}
     readonly property bool modalOpen: sheetsDialog.visible || stylesDialog.visible ||
-        lineFieldDialog.visible || summaryDialog.visible || aboutDialog.visible || commandDialog.visible ||
-        checkpointDialog.visible || addDialog.visible || kmlDialog.visible || portableDialog.visible
+        lineFieldDialog.visible || lineFieldsDialog.visible || summaryDialog.visible || aboutDialog.visible || commandDialog.visible ||
+        updateDialog.visible || checkpointDialog.visible || addDialog.visible || kmlDialog.visible || portableDialog.visible
     onModalOpenChanged: controller.pauseAutosave(modalOpen || appRoot.autosavePaused)
     component Input: TextField {
         id:field;implicitHeight:32;leftPadding:9;rightPadding:9;font.pixelSize:13;selectByMouse:true
@@ -61,10 +66,11 @@ Item {
     }
     component Action: Button {
         id: button
+        onPressed:appRoot.noteCompareGesture()
         implicitHeight: 31; leftPadding: 10; rightPadding: 10; topInset: 0; bottomInset: 0
         hoverEnabled: true
         background: Rectangle {radius:3;color:!button.enabled?"#eef0f3":button.highlighted?"#356ac3":button.hovered?"#e2e8f1":"#f0f2f5"}
-        contentItem: Label {text:button.text;color:button.highlighted?"white":button.enabled?"#303944":"#939ba6";horizontalAlignment:Text.AlignHCenter;verticalAlignment:Text.AlignVCenter;elide:Text.ElideRight}
+        contentItem: Label {text:button.text;font:button.font;color:!button.enabled?"#939ba6":button.highlighted?"white":"#303944";horizontalAlignment:Text.AlignHCenter;verticalAlignment:Text.AlignVCenter;elide:Text.ElideRight}
     }
     component SurfaceDialog: Dialog {
         id:surface
@@ -74,7 +80,7 @@ Item {
         closePolicy:Popup.CloseOnEscape
         background:Rectangle {color:"white";border.color:"#dce0e6";radius:4}
         standardButtons:Dialog.NoButton
-        header:Label {text:surface.title;padding:16;bottomPadding:12;font.pixelSize:17;font.bold:true;color:"#252f3d"}
+        header:Label {text:surface.title;padding:16;bottomPadding:12;font.pixelSize:17;font.bold:true;color:"#252f3d";elide:Text.ElideRight}
         footer:Item {implicitHeight:50;Action {anchors.right:parent.right;anchors.rightMargin:14;anchors.verticalCenter:parent.verticalCenter;text:"Закрыть";onClicked:surface.close()}}
     }
     FileDialog {id:addDialog;title:"Добавить листы карты";fileMode:FileDialog.OpenFiles;nameFilters:["Геопривязанные карты (*.tif *.tiff)"];onAccepted:controller.addSheets(selectedFiles)}
@@ -96,6 +102,8 @@ Item {
                 Label {text:(panels.state.sheets||[]).length+" листов · EPSG:3857";color:"#687383"}
             }
             Label {text:"Каждый лист распознаётся целиком. KML ограничивает общий результат участка. В перекрытии приоритет у последнего листа.";Layout.fillWidth:true;wrapMode:Text.WordWrap;color:"#687383"}
+            CheckBox {objectName:"smoothScanSeams";text:"Сглаживать узкие стыки сканов";checked:panels.state.smoothScanSeams!==false;enabled:!panels.state.busy&&(panels.state.sheets||[]).length>1;onClicked:controller.setSmoothScanSeams(checked)
+                ToolTip.visible:hovered;ToolTip.delay:650;ToolTip.text:"Только отображение крайнего ряда пикселей. Координаты и полигоны не меняются."}
             ListView {
                 Layout.fillWidth:true;Layout.fillHeight:true;clip:true;spacing:5;model:panels.state.sheets||[]
                 ScrollBar.vertical:ScrollBar {}
@@ -137,7 +145,7 @@ Item {
             }
             RowLayout {Layout.fillWidth:true
                 Rectangle {width:24;height:24;radius:3;color:card.choice.color||"#eef1f6";border.color:"#aeb8c5"}
-                Choice {Layout.fillWidth:true;model:(panels.state.classMappings||[]).filter(function(g){return g.sheet===card.choice.sheet});textRole:"group"
+                Choice {Layout.fillWidth:true;model:(panels.state.classMappings||[]).filter(function(g){return g.sheet===card.choice.sheet&&!g.matched});textRole:"group"
                     displayText:card.choice.group?"Группа "+card.choice.group:"Выберите заливку…";currentIndex:model.findIndex(function(g){return g.group===card.choice.group})
                     delegate:ItemDelegate {required property var modelData;width:parent.width
                         contentItem:RowLayout {Rectangle {width:18;height:18;color:modelData.color;radius:2} Label {text:"Группа "+modelData.group;Layout.fillWidth:true}}}
@@ -168,28 +176,108 @@ Item {
                     Label {text:"Общий класс"}
                     Choice {id:matchTarget;Layout.fillWidth:true;model:panels.state.projectClasses||[];textRole:"name";valueRole:"id";currentIndex:Math.max(0,(panels.state.matchingA||{}).classId-1)}
                     Input {id:matchName;Layout.preferredWidth:200;maximumLength:200;placeholderText:"Или название нового класса"}
-                    Action {text:"Сопоставить";highlighted:true;enabled:!!(panels.state.matchingA||{}).group&&!!(panels.state.matchingB||{}).group&&!panels.state.busy;onClicked:controller.applyMatchedGroups(matchTarget.currentValue||0,matchName.text)}
+                    Action {text:"Сопоставить";highlighted:true;enabled:(!!(panels.state.matchingA||{}).group||!!(panels.state.matchingB||{}).group)&&!panels.state.busy;onClicked:controller.applyMatchedGroups(matchTarget.currentValue||0,matchName.text)}
                 }
                 RowLayout {Layout.fillWidth:true
-                    Label {text:"После сопоставления можно убрать стыки полигонов одинакового класса.";Layout.fillWidth:true;wrapMode:Text.WordWrap;color:"#687383";font.pixelSize:11}
-                    Action {text:panels.state.stitching?"Обновить сшивку":"Сшить границы листов";highlighted:panels.state.stitching===true;enabled:!panels.state.busy;onClicked:controller.stitchMatchedGroups()}
+                    Label {text:"Готовые заливки исчезают из списков, дубликаты групп удаляются. Можно назначить общую группу одному образцу.";Layout.fillWidth:true;wrapMode:Text.WordWrap;color:"#687383";font.pixelSize:11}
                     Action {text:"Проверить стыки";enabled:!panels.state.busy;onClicked:controller.checkSeams()}
                 }
             }
         }
     }
     SurfaceDialog {
-        id:stylesDialog;objectName:"workspaceStylesDialog";title:"Оформление полигонов";width:620;height:480
+        id:classManager;objectName:"workspaceClassManager";title:"Группы полигонов"
+        parent:appRoot.mapViewport;anchors.centerIn:null;x:Math.max(0,parent.width-width-8);y:8
+        modal:false;dim:false;width:390;height:Math.min(parent.height-16,680)
+        property int selectedId:0
+        property bool creating:false
+        property int seenEpoch:-1
+        readonly property var current:(panels.state.projectClasses||[]).find(function(c){return c.id===classManager.selectedId})||({})
+        function choose(identity){var rows=panels.state.projectClasses||[];selectedId=rows.some(function(c){return c.id===identity})?identity:((rows[0]||{}).id||0);creating=false;classTitle.text=current.name||"";classFill.text=(current.style||{}).fill||"#80b5d2"}
+        function newGroup(){selectedId=0;creating=true;classTitle.text="";classFill.text="#80b5d2";classTitle.forceActiveFocus()}
+        onOpened:choose(panels.state.groupFocusId||(panels.state.selection||{}).class_id||((panels.state.projectClasses||[])[0]||{}).id||0)
+        contentItem:ColumnLayout {spacing:8
+            RowLayout {Layout.fillWidth:true
+                Label {text:"Группы проекта";font.bold:true;Layout.fillWidth:true}
+                Action {text:"+ Новая";objectName:"newProjectGroup";enabled:!panels.state.busy;onClicked:classManager.newGroup()}
+            }
+            ListView {Layout.fillWidth:true;Layout.fillHeight:true;Layout.minimumHeight:130;clip:true;spacing:4;model:panels.state.projectClasses||[];ScrollBar.vertical:ScrollBar {}
+                delegate:Rectangle {required property var modelData;width:ListView.view.width;height:42;radius:3;color:classManager.selectedId===modelData.id?"#edf3fc":"#f5f7fa"
+                    RowLayout {anchors.fill:parent;anchors.margins:5;spacing:7
+                        CheckBox {checked:(panels.state.hiddenClassIds||[]).indexOf(modelData.id)<0;enabled:!panels.state.busy;onClicked:controller.setGroupVisible(modelData.id,checked);ToolTip.visible:hovered;ToolTip.text:"Видимость группы"}
+                        Rectangle {objectName:"groupStyleSwatch"+modelData.id;width:20;height:20;radius:3;color:modelData.style.fill;MouseArea {anchors.fill:parent;onClicked:panels.editGroup(modelData.id)}}
+                        Label {Layout.fillWidth:true;elide:Text.ElideRight;text:modelData.id+" · "+modelData.name}
+                        Label {text:((panels.state.summary||{}).classes||[]).filter(function(c){return c.id===modelData.id}).map(function(c){return c.count}).join("");color:"#687383"}
+                    }
+                    TapHandler {onTapped:classManager.choose(modelData.id)}
+                }
+            }
+            Label {text:classManager.creating?"Новая группа":"Группа "+classManager.selectedId;font.bold:true}
+            Input {id:classTitle;objectName:"projectGroupName";Layout.fillWidth:true;maximumLength:200;placeholderText:"Название группы";enabled:!panels.state.busy}
+            RowLayout {Layout.fillWidth:true
+                Rectangle {width:28;height:28;color:classFill.acceptableInput?classFill.text:"#ffffff";border.color:"#cbd4e1";radius:3;MouseArea {anchors.fill:parent;onClicked:{if(classManager.creating)panels.chooseColor(classFill);else panels.editGroup(classManager.selectedId)}}}
+                Input {id:classFill;objectName:"projectGroupColor";visible:classManager.creating;Layout.fillWidth:true;placeholderText:"#RRGGBB";validator:RegularExpressionValidator {regularExpression:/#[0-9a-fA-F]{6}/}}
+                Action {text:classManager.creating?"Цвет…":"Оформление…";Layout.fillWidth:!classManager.creating;onClicked:{if(classManager.creating)panels.chooseColor(classFill);else panels.editGroup(classManager.selectedId)}}
+            }
+            RowLayout {Layout.fillWidth:true
+                Action {text:classManager.creating?"Создать группу":"Сохранить";objectName:"saveProjectGroup";highlighted:true;enabled:!panels.state.busy&&!!classTitle.text.trim()&&classFill.acceptableInput
+                    onClicked:{if(classManager.creating)controller.createGroup(classTitle.text,classFill.text);else{var style=Object.assign({},classManager.current.style);style.fill=classFill.text;controller.styleClass(classManager.selectedId,classTitle.text,JSON.stringify(style))}}}
+            }
+            Action {Layout.fillWidth:true;text:"Назначить выбранным полигонам";enabled:!classManager.creating&&classManager.selectedId>0&&!!(panels.state.selection||{}).object_id&&!panels.state.busy&&!panels.state.polygonsLocked;onClicked:controller.setObjectsGroup(classManager.selectedId)}
+            Rectangle {Layout.fillWidth:true;height:1;color:"#dce0e6"}
+            Label {text:"Удаление группы";font.bold:true}
+            Choice {id:deleteClassTarget;objectName:"deleteClassTarget";visible:((panels.state.summary||{}).classes||[]).some(function(c){return c.id===classManager.selectedId&&c.count>0});Layout.fillWidth:true;model:[{id:0,name:"Перенести объекты в…"}].concat((panels.state.projectClasses||[]).filter(function(c){return c.id!==classManager.selectedId}));textRole:"name";valueRole:"id"}
+            Action {Layout.fillWidth:true;text:"Удалить группу";objectName:"deleteProjectGroup";enabled:!classManager.creating&&classManager.selectedId>0&&!panels.state.busy&&!panels.state.polygonsLocked;onClicked:controller.deleteGroup(classManager.selectedId,deleteClassTarget.currentValue||0)}
+            Label {text:"При удалении занятой группы выберите назначение: геометрия и атрибуты полигонов сохранятся. Действия можно отменить.";Layout.fillWidth:true;wrapMode:Text.WordWrap;color:"#687383";font.pixelSize:11}
+        }
+        Connections {target:controller;function onChanged(){if(classManager.visible&&!panels.state.busy&&classManager.seenEpoch!==panels.state.polygonEpoch){classManager.seenEpoch=panels.state.polygonEpoch;classManager.choose(panels.state.groupFocusId||classManager.selectedId)}}}
+    }
+    SurfaceDialog {
+        id:smoothPanel;objectName:"workspaceSmoothing";title:"Сглаживание границ"
+        parent:appRoot.mapViewport;anchors.centerIn:null;x:Math.max(0,parent.width-width-8);y:8
+        modal:false;dim:false;width:365;height:Math.min(parent.height-16,smoothScope.currentValue==="group"?500:468)
+        property bool dirtyPreview:true
+        onOpened:{if(!controller.beginSmoothing()){close();return}appRoot.viewing=true;appRoot.originalOnly=false;if(panels.state.lineMode)controller.setLineMode(false);dirtyPreview=true;smoothScope.currentIndex=((panels.state.editSelected||[]).length||(panels.state.selection||{}).object_id)?0:2;smoothGroup.currentIndex=Math.max(0,((panels.state.selection||{}).class_id||1)-1)}
+        onClosed:controller.cancelSmoothing()
+        function preview(){dirtyPreview=false;controller.previewSmoothing(smoothScope.currentValue,smoothGroup.currentValue||0,smoothMode.currentValue,smoothStrength.value)}
+        contentItem:ColumnLayout {spacing:8
+            Label {font.pixelSize:12;text:"Общие границы меняются согласованно. Контур участка и узлы соединений закреплены.";Layout.fillWidth:true;wrapMode:Text.WordWrap;color:"#687383"}
+            Choice {id:smoothScope;Layout.fillWidth:true;model:[{key:"selected",name:"Выбранные полигоны"},{key:"group",name:"Одна группа"},{key:"all",name:"Весь результат"}];textRole:"name";valueRole:"key";enabled:!panels.state.busy;onActivated:smoothPanel.dirtyPreview=true}
+            Choice {id:smoothGroup;visible:smoothScope.currentValue==="group";Layout.fillWidth:true;model:panels.state.projectClasses||[];textRole:"name";valueRole:"id";enabled:!panels.state.busy;onActivated:smoothPanel.dirtyPreview=true}
+            Choice {id:smoothMode;objectName:"smoothingMode";Layout.fillWidth:true;model:[{key:"gentle",name:"Бережное"},{key:"smooth",name:"Плавное"},{key:"simplify",name:"Упрощение"}];textRole:"name";valueRole:"key";enabled:!panels.state.busy;onActivated:smoothPanel.dirtyPreview=true}
+            RowLayout {Layout.fillWidth:true
+                Label {text:"Сила"}
+                Slider {id:smoothStrength;objectName:"smoothingStrength";Layout.fillWidth:true;from:0;to:100;stepSize:1;value:50;enabled:!panels.state.busy;onMoved:smoothPanel.dirtyPreview=true}
+                Label {text:Math.round(smoothStrength.value)+"%";Layout.preferredWidth:38}
+            }
+            Action {text:"Предпросмотр";objectName:"previewSmoothingButton";Layout.fillWidth:true;highlighted:true;enabled:!panels.state.busy&&panels.state.count>0;onClicked:smoothPanel.preview()}
+            CheckBox {objectName:"smoothingComparison";text:"Показывать сглаженный контур";checked:panels.state.geometryPreviewVisible!==false;enabled:panels.state.geometryReady;onClicked:controller.showSmoothPreview(checked)}
+            Label {text:smoothPanel.dirtyPreview&&panels.state.geometryReady?"Настройки изменены. Обновите предпросмотр.":panels.state.smoothInfo||"Бережное сглаживание выполняется и при оцифровке. Изменение можно отменить.";Layout.fillWidth:true;wrapMode:Text.WordWrap;color:"#566273";font.pixelSize:12}
+            Item {Layout.fillHeight:true}
+            Action {text:"Применить";objectName:"applySmoothingButton";Layout.fillWidth:true;highlighted:true;enabled:panels.state.geometryReady&&!panels.state.busy&&!smoothPanel.dirtyPreview;onClicked:{controller.acceptGeometry();smoothPanel.close()}}
+        }
+    }
+    SurfaceDialog {
+        id:stylesDialog;objectName:"workspaceStylesDialog";title:"Оформление · "+(current.name||"группа");width:480;height:460
+        property int identity:0
         property var current:({})
-        function choose() {if(styleClass.currentIndex>=0)current=(panels.state.projectClasses||[])[styleClass.currentIndex]||({})}
+        function choose() {current=(panels.state.projectClasses||[]).find(function(c){return c.id===stylesDialog.identity})||({})}
         onOpened:choose()
+        footer:Item {implicitHeight:54
+            RowLayout {anchors.fill:parent;anchors.leftMargin:12;anchors.rightMargin:12
+            Action {objectName:"applyGroupStyle";text:"Применить оформление";highlighted:true;enabled:!panels.state.busy&&!!stylesDialog.current.id
+                onClicked:{controller.styleClass(stylesDialog.current.id,className.text,JSON.stringify({fill:fillColor.text,outline:edgeColor.text,width:edgeWidth.value/10,opacity:fillOpacity.value,label:classLabel.currentValue||""}));stylesDialog.close()}}
+                Item {Layout.fillWidth:true}
+                Action {text:"Отмена";onClicked:stylesDialog.close()}
+            }
+        }
         contentItem:ColumnLayout {
             spacing:12
-            Choice {id:styleClass;Layout.fillWidth:true;model:panels.state.projectClasses||[];textRole:"name";onActivated:stylesDialog.choose()}
-            Input {id:className;Layout.fillWidth:true;text:stylesDialog.current.name||"";placeholderText:"Название класса"}
+            Label {text:"Группа "+stylesDialog.identity;font.bold:true;color:"#687383"}
+            Input {id:className;maximumLength:200;Layout.fillWidth:true;text:stylesDialog.current.name||"";placeholderText:"Название класса"}
             GridLayout {columns:3;columnSpacing:12;rowSpacing:10
                 Label {text:"Заливка"} Rectangle {width:28;height:28;color:fillColor.text.match(/^#[0-9a-f]{6}$/i)?fillColor.text:"transparent";border.color:"#aeb8c5";MouseArea {anchors.fill:parent;onClicked:panels.chooseColor(fillColor)}}
-                Input {id:fillColor;Layout.fillWidth:true;text:stylesDialog.current.style?stylesDialog.current.style.fill:"#80b5d2";placeholderText:"#RRGGBB"}
+                Input {id:fillColor;objectName:"groupStyleFill";Layout.fillWidth:true;text:stylesDialog.current.style?stylesDialog.current.style.fill:"#80b5d2";placeholderText:"#RRGGBB"}
                 Label {text:"Граница"} Rectangle {width:28;height:28;color:edgeColor.text.match(/^#[0-9a-f]{6}$/i)?edgeColor.text:"transparent";border.color:"#aeb8c5";MouseArea {anchors.fill:parent;onClicked:panels.chooseColor(edgeColor)}}
                 Input {id:edgeColor;Layout.fillWidth:true;text:stylesDialog.current.style?stylesDialog.current.style.outline:"#334b5f"}
                 Label {text:"Толщина"} Counter {id:edgeWidth;factor:10;from:1;to:100;value:stylesDialog.current.style?Math.round(stylesDialog.current.style.width*10):10;editable:true;stepSize:1}
@@ -201,8 +289,7 @@ Item {
             Choice {id:classLabel;Layout.fillWidth:true;model:[{key:"",label:"Без подписей"},{key:"class_name",label:"Название класса"},{key:"object_id",label:"Номер объекта"}].concat((panels.state.fields||[]).map(function(f){return {key:f.key,label:f.label}}));textRole:"label";valueRole:"key"
                 currentIndex:Math.max(0,model.findIndex(function(f){return f.key===((stylesDialog.current.style||{}).label||"")}))}
             Item {Layout.fillHeight:true}
-            Action {text:"Применить оформление";highlighted:true;enabled:!panels.state.busy&&!!stylesDialog.current.id
-                onClicked:{controller.styleClass(stylesDialog.current.id,className.text,JSON.stringify({fill:fillColor.text,outline:edgeColor.text,width:edgeWidth.value/10,opacity:fillOpacity.value,label:classLabel.currentValue||""}));stylesDialog.close()}}
+
         }
     }
     SurfaceDialog {
@@ -326,6 +413,18 @@ Item {
             Shortcut {sequences:["Ctrl+Return","Meta+Return"];enabled:lineAttributes.visible&&lineApply.enabled;onActivated:lineApply.clicked()}
     }
     SurfaceDialog {
+        id:lineFieldsDialog;objectName:"workspaceLineFields";title:"Поля линий";width:500;height:390
+        contentItem:ColumnLayout {spacing:10
+            Label {text:"Номер, тип, имя, примечание и длина входят в базовые атрибуты. Здесь настраиваются дополнительные поля.";Layout.fillWidth:true;wrapMode:Text.WordWrap;color:"#687383"}
+            ListView {Layout.fillWidth:true;Layout.fillHeight:true;clip:true;model:panels.state.lineFields||[]
+                delegate:ItemDelegate {required property var modelData;width:ListView.view.width;text:modelData.label+" · "+modelData.key;onClicked:lineFieldDialog.edit(modelData)}
+                ScrollBar.vertical:ScrollBar {}
+                Label {anchors.centerIn:parent;visible:parent.count===0;text:"Дополнительных полей пока нет";color:"#87919e"}
+            }
+            Action {text:"Добавить поле…";onClicked:lineFieldDialog.edit(null)}
+        }
+    }
+    SurfaceDialog {
         id:lineFieldDialog;title:original?"Поле линий":"Новое поле линий";width:520;height:400
         property string original:""
         function edit(field){original=field?field.key:"";lfKey.text=original;lfName.text=field?field.label:"";lfType.currentIndex=field?["text","integer","number","boolean","date","choice"].indexOf(field.type):0;lfChoices.text=field?(field.choices||[]).join(";"):"";lfRequired.checked=field?field.required:false;open()}
@@ -362,7 +461,7 @@ Item {
     SurfaceDialog {
         id:checkpointDialog;title:"Контрольные сохранения";width:690
         contentItem:ColumnLayout {
-            RowLayout {Input {id:checkpointName;Layout.fillWidth:true;placeholderText:"Например, до сшивки листов"}
+            RowLayout {Input {id:checkpointName;Layout.fillWidth:true;placeholderText:"Например, до правки границ"}
                 Action {text:"Создать";enabled:!panels.state.busy;onClicked:controller.createCheckpoint(checkpointName.text)}}
             Label {text:"Снимок сохраняет листы, группы, полигоны, линии и оформление. Возврат можно отменить.";Layout.fillWidth:true;wrapMode:Text.WordWrap;color:"#687383"}
             ListView {Layout.fillWidth:true;Layout.fillHeight:true;clip:true;model:panels.state.checkpointItems||[];ScrollBar.vertical:ScrollBar {}
@@ -383,7 +482,26 @@ Item {
             Label {text:"TJS PRIME — разработка приложения\nTJS MERIDIAN / DATA — ГИС и пространственные данные\nTJS GEOPHYSICS — предметные сценарии\nTJS XLAB — исследования и экспериментальные методы\nTJS QUANTUM — направление вычислительных исследований";wrapMode:Text.WordWrap;Layout.fillWidth:true;color:"#566273";lineHeight:1.5}
             Label {text:"Автоматические предложения требуют проверки. Цветовой класс не устанавливает геологический возраст или название подразделения.";wrapMode:Text.WordWrap;Layout.fillWidth:true;color:"#687383"}
             Item {Layout.fillHeight:true}
+            Action {text:"Проверить обновления…";onClicked:{aboutDialog.close();updateDialog.open();controller.checkUpdates()}}
             Action {text:"Руководство пользователя";onClicked:controller.openManual()}
+        }
+    }
+    SurfaceDialog {
+        id:updateDialog;objectName:"workspaceUpdates";title:"Обновление GeoTrace";width:560;height:430
+        contentItem:ColumnLayout {spacing:12
+            Label {text:"Установлена версия "+controller.releaseLabel;font.bold:true}
+            Label {text:panels.state.updateMessage||"";Layout.fillWidth:true;wrapMode:Text.WordWrap;color:panels.state.updateState==="error"?"#a3313f":"#303944"}
+            ProgressBar {Layout.fillWidth:true;visible:panels.state.updateState==="checking"||panels.state.updateState==="downloading";indeterminate:panels.state.updateState==="checking";from:0;to:100;value:panels.state.updateProgress||0}
+            ScrollView {Layout.fillWidth:true;Layout.fillHeight:true;clip:true
+                TextArea {text:panels.state.updateNotes||"Изменения новой версии появятся здесь после проверки.";readOnly:true;textFormat:TextEdit.PlainText;wrapMode:TextEdit.Wrap;color:"#566273";background:null}}
+            RowLayout {Layout.fillWidth:true
+                Action {text:"Проверить";objectName:"checkUpdatesButton";enabled:["checking","downloading"].indexOf(panels.state.updateState)<0;onClicked:controller.checkUpdates()}
+                Action {text:"Скачать";visible:panels.state.updateState==="available";highlighted:true;onClicked:controller.downloadUpdate()}
+                Action {text:"Отменить загрузку";visible:panels.state.updateState==="downloading";onClicked:controller.cancelUpdateDownload()}
+                Action {text:"Установить и закрыть GeoTrace";visible:panels.state.updateState==="ready";enabled:!panels.state.busy;highlighted:true;onClicked:{updateDialog.close();appRoot.request("installUpdate")}}
+                Item {Layout.fillWidth:true}
+            }
+            Action {text:"Открыть страницу выпусков";onClicked:controller.openReleasePage()}
         }
     }
     SurfaceDialog {
