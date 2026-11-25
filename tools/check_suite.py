@@ -9,7 +9,7 @@ import subprocess,sys,tempfile,xml.etree.ElementTree as ET
 ROOT=Path(__file__).resolve().parents[1]
 
 def main():
- ui=[p for p in sorted((ROOT/'tests').glob('test_*.py')) if 'QQmlApplicationEngine' in p.read_text() or 'from test_workspace_ux import' in p.read_text()]
+ ui=[p for p in sorted((ROOT/'tests').glob('test_*.py')) if 'QQmlApplicationEngine' in p.read_text(encoding="utf-8") or 'from test_workspace_ux import' in p.read_text(encoding="utf-8")]
  count=failed=0
  with tempfile.TemporaryDirectory(prefix='geotrace-tests-') as folder:
   groups=[['tests',*['--ignore='+str(p.relative_to(ROOT)) for p in ui]]]+[[str(p.relative_to(ROOT))] for p in ui]
