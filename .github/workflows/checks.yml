@@ -7,7 +7,28 @@ on:
 permissions:
   contents: read
 jobs:
+  installer-quick:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pillow
+      - name: Check fresh installation and replacement with a small payload
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            choco install nsis --yes --no-progress --limit-output
+            if (Test-Path "${env:ProgramFiles(x86)}/NSIS/makensis.exe") { break }
+            if ($attempt -lt 3) { Start-Sleep -Seconds 15 }
+          }
+          if (!(Test-Path "${env:ProgramFiles(x86)}/NSIS/makensis.exe")) { throw 'NSIS is missing' }
+          python tools/check_windows_installer.py
+
   test:
+    needs: installer-quick
     strategy:
       fail-fast: false
       matrix:
@@ -111,6 +132,8 @@ jobs:
             test-screenshots/*
             build/pyinstaller/GeoTrace/warn-GeoTrace.txt
             dist/desktop/*.json
+            dist/desktop/*-Setup.exe
+            dist/desktop/*-Windows-x64.zip
           if-no-files-found: ignore
   documents:
     needs: test

@@ -7,6 +7,8 @@ Var PreviousDir
 Var LegacyDir
 Var ExistingVersion
 Var UpgradeText
+Var InstallStage
+Var PayloadStage
 Name "GeoTrace ${VERSION}"
 OutFile "${OUTPUT}"
 InstallDir "$PROGRAMFILES64\GeoTrace"
@@ -117,6 +119,13 @@ Function LaunchGeoTrace
   ExecShell "open" "$WINDIR\explorer.exe" '"$INSTDIR\GeoTrace.exe"'
 FunctionEnd
 
+Function TraceInstallFailure
+  System::Call 'kernel32::GetLastError() i.r8'
+  FileOpen $9 "$TEMP\GeoTrace-install.log" w
+  FileWrite $9 "$InstallStage$\r$\nWindows error: $8$\r$\nDestination: $INSTDIR$\r$\nWorking directory: $OUTDIR$\r$\n"
+  FileClose $9
+FunctionEnd
+
 Section "GeoTrace" MainSection
   AddSize ${PAYLOAD_KB}
   GetFullPathName $INSTDIR "$INSTDIR\."
@@ -136,14 +145,20 @@ Section "GeoTrace" MainSection
   ${EndIf}
   ; Unpack before touching the installed payload. Keep the old executable and
   ; libraries until copying succeeds, so a failed update can roll back.
-  InitPluginsDir
-  SetOutPath "$PLUGINSDIR\payload"
+  ; Stage on the destination volume. Moving the two owned payload entries
+  ; avoids Shell CopyFiles limitations and keeps rollback on the same volume.
+  CreateDirectory "$INSTDIR"
+  ClearErrors
+  GetTempFileName $PayloadStage "$INSTDIR"
+  IfErrors unpack_failed
+  Delete "$PayloadStage"
+  SetOutPath "$PayloadStage"
+  IfErrors unpack_failed
   ClearErrors
   File /r "${APPDIR}\*.*"
   IfErrors unpack_failed
   IfFileExists "$INSTDIR\GeoTrace.previous.exe" backup_exists
   IfFileExists "$INSTDIR\_internal.previous\*.*" backup_exists
-  CreateDirectory "$INSTDIR"
   ClearErrors
   IfFileExists "$INSTDIR\GeoTrace.exe" 0 +2
     Rename "$INSTDIR\GeoTrace.exe" "$INSTDIR\GeoTrace.previous.exe"
@@ -152,33 +167,54 @@ Section "GeoTrace" MainSection
     Rename "$INSTDIR\_internal" "$INSTDIR\_internal.previous"
   IfErrors rename_failed
   ClearErrors
-  CopyFiles /SILENT "$PLUGINSDIR\payload\*.*" "$INSTDIR"
+  Rename "$PayloadStage\GeoTrace.exe" "$INSTDIR\GeoTrace.exe"
+  IfErrors copy_failed
+  Rename "$PayloadStage\_internal" "$INSTDIR\_internal"
   IfErrors copy_failed
   Delete "$INSTDIR\GeoTrace.previous.exe"
   RMDir /r "$INSTDIR\_internal.previous"
   SetOutPath "$INSTDIR"
+  RMDir "$PayloadStage"
   Goto payload_ready
   copy_failed:
+    StrCpy $InstallStage "copy_failed"
+    Call TraceInstallFailure
     Delete "$INSTDIR\GeoTrace.exe"
     RMDir /r "$INSTDIR\_internal"
     IfFileExists "$INSTDIR\GeoTrace.previous.exe" 0 +2
       Rename "$INSTDIR\GeoTrace.previous.exe" "$INSTDIR\GeoTrace.exe"
     IfFileExists "$INSTDIR\_internal.previous\*.*" 0 +2
       Rename "$INSTDIR\_internal.previous" "$INSTDIR\_internal"
+    SetOutPath "$INSTDIR"
+    RMDir /r "$PayloadStage"
     MessageBox MB_OK|MB_ICONSTOP "Не удалось обновить файлы. Прежняя версия восстановлена." /SD IDOK
     SetErrorLevel 2
     Abort
   rename_failed:
+    StrCpy $InstallStage "rename_failed"
+    Call TraceInstallFailure
     IfFileExists "$INSTDIR\GeoTrace.previous.exe" 0 +2
       Rename "$INSTDIR\GeoTrace.previous.exe" "$INSTDIR\GeoTrace.exe"
+    SetOutPath "$INSTDIR"
+    RMDir /r "$PayloadStage"
     MessageBox MB_OK|MB_ICONSTOP "Не удалось подготовить обновление. Закройте GeoTrace и повторите установку." /SD IDOK
     SetErrorLevel 2
     Abort
   unpack_failed:
+    StrCpy $InstallStage "unpack_failed"
+    Call TraceInstallFailure
+    SetOutPath "$INSTDIR"
+    ${If} $PayloadStage != ""
+      RMDir /r "$PayloadStage"
+    ${EndIf}
     MessageBox MB_OK|MB_ICONSTOP "Не удалось подготовить файлы. Предыдущая установка не изменена." /SD IDOK
     SetErrorLevel 2
     Abort
   backup_exists:
+    StrCpy $InstallStage "backup_exists"
+    Call TraceInstallFailure
+    SetOutPath "$INSTDIR"
+    RMDir /r "$PayloadStage"
     MessageBox MB_OK|MB_ICONSTOP "Обнаружена копия незавершённого обновления. Завершите восстановление прежней установки." /SD IDOK
     SetErrorLevel 2
     Abort
