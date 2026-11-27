@@ -17,7 +17,7 @@ def main():
         Image.new('RGBA',(64,64),'#263445').save(assets/'GeoTrace.ico')
         Image.new('RGB',(164,314),'#263445').save(assets/'wizard.bmp')
         Image.new('RGB',(150,57),'white').save(assets/'header.bmp')
-        setup=work/'Setup.exe';destination=work/'Installed GeoTrace'
+        setup=work/'GeoTrace-Installer-Check.exe';destination=work/'Installed GeoTrace'
         subprocess.run([str(compiler),'/WX','/INPUTCHARSET','UTF8','/DVERSION=1.1.0','/DBUILD=1','/DPAYLOAD_KB=1',f'/DOUTPUT={setup}',f'/DAPPDIR={payload}',f'/DASSETS={assets}',str(ROOT/'packaging/windows.nsi')],check=True)
         log=Path(os.environ['TEMP'])/'GeoTrace-install.log';log.unlink(missing_ok=True)
         for attempt in range(2):
