@@ -21,7 +21,10 @@ def main():
         subprocess.run([str(compiler),'/WX','/INPUTCHARSET','UTF8','/DVERSION=1.1.0','/DBUILD=1','/DPAYLOAD_KB=1',f'/DOUTPUT={setup}',f'/DAPPDIR={payload}',f'/DASSETS={assets}',str(ROOT/'packaging/windows.nsi')],check=True)
         log=Path(os.environ['TEMP'])/'GeoTrace-install.log';log.unlink(missing_ok=True)
         for attempt in range(2):
-            result=subprocess.run([str(setup),'/S',f'/D={destination}'],timeout=120)
+            # NSIS requires /D to be the unquoted final command-line tail,
+            # including spaces; Windows list2cmdline would quote the whole arg.
+            command=subprocess.list2cmdline([str(setup),'/S'])+f' /D={destination}'
+            result=subprocess.run(command,timeout=120)
             print('Installer attempt',attempt+1,'exit',result.returncode,flush=True)
             if result.returncode:
                 print(log.read_text(errors='replace') if log.exists() else 'No failure log',flush=True)
@@ -33,6 +36,7 @@ def main():
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,r'Software\Microsoft\Windows\CurrentVersion\Uninstall\GeoTrace',0,winreg.KEY_READ|winreg.KEY_WOW64_64KEY) as key:
             assert winreg.QueryValueEx(key,'UninstallString')[0]=='"'+str(destination/'Uninstall.exe')+'"'
         print('Fresh installation, update, obsolete-file removal and quoted uninstall path passed.',flush=True)
-        subprocess.run([str(destination/'Uninstall.exe'),'/S',f'_?={destination}'],check=True,timeout=120)
+        command=subprocess.list2cmdline([str(destination/'Uninstall.exe'),'/S'])+f' _?={destination}'
+        subprocess.run(command,check=True,timeout=120)
 
 if __name__=='__main__':main()

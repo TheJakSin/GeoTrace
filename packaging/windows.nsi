@@ -69,12 +69,8 @@ Function .onInit
   ${EndIf}
   StrCpy $UpgradeText ""
   ${If} $PreviousDir != ""
-    ${GetParameters} $R0
-    ClearErrors
-    ${GetOptions} "$R0" "/D=" $R1
-    ${If} ${Errors}
-      StrCpy $INSTDIR $PreviousDir
-    ${EndIf}
+    ; InstallDirRegKey supplies the old path. NSIS itself gives an explicit
+    ; /D destination priority and removes it from $CMDLINE.
     StrCpy $UpgradeText "Предыдущая версия будет обновлена. Карты, проекты и настройки сохранятся."
   ${ElseIf} $LegacyDir != ""
     StrCpy $UpgradeText "Предыдущая установка будет перенесена в Program Files. Проекты и настройки сохранятся."
@@ -128,7 +124,18 @@ FunctionEnd
 
 Section "GeoTrace" MainSection
   AddSize ${PAYLOAD_KB}
-  GetFullPathName $INSTDIR "$INSTDIR\."
+  ; NSIS GetFullPathName requires an existing parent. A fresh destination may
+  ; have several new components, so normalize with the Win32 lexical API.
+  StrCpy $0 "$INSTDIR"
+  System::Call 'kernel32::GetFullPathNameW(w r0, i ${NSIS_MAX_STRLEN}, w .r1, p 0) i.r2'
+  ${If} $2 == 0
+  ${OrIf} $2 >= ${NSIS_MAX_STRLEN}
+    MessageBox MB_OK|MB_ICONSTOP "Не удалось определить папку установки. Выберите другую папку." /SD IDOK
+    SetErrorLevel 2
+    Abort
+  ${EndIf}
+  StrCpy $INSTDIR $1
+  Call .onVerifyInstDir
   IfFileExists "$INSTDIR\_internal\*.*" 0 target_owned
   IfFileExists "$INSTDIR\GeoTrace.exe" target_owned
   MessageBox MB_OK|MB_ICONSTOP "Выберите отдельную папку для GeoTrace: в этой папке есть файлы другой программы." /SD IDOK
