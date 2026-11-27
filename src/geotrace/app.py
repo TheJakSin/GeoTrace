@@ -998,7 +998,8 @@ class Backend(QObject):
                 self.commit_geometry()
             elif self.kind == 'geometry':
                 self.edit_preview = output
-                self.notify(editPreviewUrl=self.url('edit-preview.png'), editSelectionUrl=self.url('edit-selection.png'), geometryReady=True,
+                if hasattr(output,'boundary_preview'):self.notify(connectionLive=output.boundary_preview,connectionInfo='Проверьте общую линию и примените правку.')
+                self.notify(editPreviewUrl=self.url('edit-preview.png'), editSelectionUrl='' if self.geometry_operation=='connect' else self.url('edit-selection.png'), geometryReady=True,
                             status='Предпросмотр правки. Проверьте границу и нажмите «Применить правку».')
             elif self.kind == 'prompt':
                 self.proposal = output
@@ -1025,6 +1026,7 @@ class Backend(QObject):
         except Cancelled as exc:
             self.notify(status=str(exc),error=False)
         except Exception as exc:
+            if getattr(self,'geometry_operation','')=='connect':self.notify(connectionInfo=str(exc),connectionLive={})
             self.notify(status=str(exc), error=True)
         finally:
             self.notify(busy=False,qualityBusy=False,qualityCancelPending=False)
@@ -1406,7 +1408,7 @@ class Backend(QObject):
             self.notify(status=str(exc), error=True)
             return
         actions = dict(merge='Объединение',split='Разделение',boundary='Общая граница',
-                       draw='Новый полигон',vertex='Перемещение вершины')
+                       draw='Новый полигон',vertex='Перемещение вершины',connect='Соединение границ')
         self.finish_review(actions.get(self.geometry_operation,self.geometry_operation))
         output = self.edit_preview
         self.record_undo(('result', self.result))

@@ -74,6 +74,7 @@ ApplicationWindow {
     }
     function chooseView() { modeTabs.currentIndex=0; viewing=true; viewport.forceActiveFocus() }
     function escapeMap() {
+        if(workspaceMode && (appState.connectionStage>0 || mapMouse.edgeDragging)){mapMouse.clearEdge();backend.clearBoundaryConnection();return}
         if(lineSampleType){lineSampleType=0;originalOnly=lineSampleOriginal;return}
         if(appState.groupMatching===true){backend.endGroupMatching();return}
         if(workspaceMode && appState.lineMode){backend.clearLineDraft();layoutFrameMode=false;return}
@@ -872,7 +873,7 @@ ApplicationWindow {
             Label { Layout.fillWidth: true; wrapMode: Text.WordWrap; color: "#566273"
                 text: "Колесо меняет масштаб. Средняя кнопка перемещает карту в любом инструменте; в просмотре можно тянуть левой. Лассо с Shift добавляет полигоны к выбору. Клавиши инструментов работают и в русской раскладке; при вводе текста они отключены." }
             Label { Layout.fillWidth: true; wrapMode: Text.WordWrap; color: "#566273"
-                text: "«Граница» позволяет тянуть общую границу сразу у двух соседей. «Перерисовать общую границу» в меню ⋯: выберите двух соседей и нарисуйте новую линию; внешний контур сохраняется." }
+                text: "«Граница»: «Тянуть» перемещает общий контакт, «Соединение» присоединяет участок к соседу. В режиме «Два клика» отметьте начало и конец и выберите сохраняемый контур. «Перерисовать общую границу» в меню ⋯: выберите двух соседей и нарисуйте новую линию; внешний контур сохраняется." }
         }
     }
     Shortcut { autoRepeat: false; sequences: ["F1"]; onActivated: helpDialog.open() }
@@ -1274,7 +1275,23 @@ ApplicationWindow {
                     ActionButton { text: "Предпросмотр"; objectName: "mergePreviewButton"; visible: editTool.currentIndex===0 && root.appState.editSelected.length>1; enabled: !root.appState.busy; onClicked: backend.previewGeometry("merge") }
                     ActionButton { text: "Атрибуты"; visible: root.appState.editSelected.length>0; onClicked: root.attributesPinned=true }
                     ActionButton { text: "Снять выбор"; shortcutLabel: "Esc"; visible: root.appState.editSelected.length>0; enabled: !root.appState.busy; onClicked: backend.clearEditSelection() }
-                    CheckBox { implicitHeight: 30; id: singleEdge; objectName: "singleEdge"; visible: modeTabs.currentIndex===2 && editTool.currentIndex===5; text: "Одна вершина" }
+                    RowLayout {visible:root.workspaceMode&&modeTabs.currentIndex===2&&editTool.currentIndex===5;spacing:5
+                        ComboBox {objectName:"boundaryModeChoice";implicitWidth:145;implicitHeight:30
+                            model:[{key:"move",name:"Тянуть"},{key:"connect",name:"Соединение"},{key:"span",name:"Два клика"}];textRole:"name";valueRole:"key"
+                            currentIndex:model.findIndex(function(m){return m.key===(root.appState.boundaryMode||"move")});enabled:!root.appState.busy
+                            onActivated:{mapMouse.clearEdge();backend.setBoundaryMode(currentValue);viewport.forceActiveFocus()}}
+                        Label {text:"Сохранить:";visible:root.appState.boundaryMode==="span"&&root.appState.connectionStage===2;color:"#566273"}
+                        ComboBox {objectName:"boundaryAnchorChoice";visible:root.appState.boundaryMode==="span"&&root.appState.connectionStage===2;implicitWidth:155;implicitHeight:30
+                            model:[{key:"neighbor",name:"Контур соседа"},{key:"source",name:"Выбранный контур"}];textRole:"name";valueRole:"key"
+                            currentIndex:root.appState.connectionAnchor==="source"?1:0;enabled:!root.appState.busy;onActivated:backend.previewBoundarySpan(currentValue)}
+                        ActionButton {text:"Выбрать заново";visible:root.appState.connectionStage>0;enabled:!root.appState.busy;onClicked:backend.clearBoundaryConnection()}
+                    }
+                    Label {visible:root.workspaceMode&&editTool.currentIndex===5&&!!text;width:Math.min(410,implicitWidth);elide:Text.ElideRight;padding:6
+                        property var live:root.appState.connectionLive||{}
+                        text:root.appState.boundaryMode==="span"?(root.appState.connectionInfo||"Нажмите начало и конец участка"):(live.valid===false?live.message:live.valid?(live.snapped?"Привязка к контуру соседа":live.objects.length>1?"Новая общая граница":"Перемещение границы")+" · объектов: "+live.objects.length:"")
+                        color:live.valid===false?"#aa3544":"#566273";ToolTip.visible:tipHover.hovered;ToolTip.text:text;HoverHandler{id:tipHover}
+                    }
+                    CheckBox { implicitHeight: 30; id: singleEdge; objectName: "singleEdge"; visible: modeTabs.currentIndex===2 && editTool.currentIndex===5 && root.appState.boundaryMode!=="span"; text: "Одна вершина" }
                     ActionButton { text: "− точка"; shortcutLabel: "Backspace"; visible: root.appState.editPoints.length>0; enabled: !root.appState.busy; onClicked: backend.removeEditPoint() }
                     ActionButton { text: "Сбросить линию"; shortcutLabel: "Esc"; visible: root.appState.editPoints.length>0; enabled: !root.appState.busy; onClicked: backend.clearEditLine() }
                     ActionButton { text: "Предпросмотр"; id: linePreviewButton; objectName: "linePreviewButton"; description: "Проверить нарисованную правку"; shortcutLabel: "Enter"; visible: modeTabs.currentIndex===2 && editTool.currentIndex>=1 && editTool.currentIndex<=3
@@ -1540,6 +1557,19 @@ ApplicationWindow {
                             visible: !root.originalOnly && (!!root.appState.areaDraftUrl || areaVisible.checked)
                             cache: false; smooth: false
                         }
+                        Canvas {id:connectionCanvas;objectName:"connectionCanvas"
+                            width:viewport.width;height:viewport.height;x:viewport.contentX-parent.x;y:viewport.contentY-parent.y
+                            visible:root.workspaceMode&&!root.viewing&&!root.originalOnly&&editTool.currentIndex===5
+                            onWidthChanged:requestPaint();onHeightChanged:requestPaint();onXChanged:requestPaint();onYChanged:requestPaint()
+                            Connections {target:backend;function onChanged(){connectionCanvas.requestPaint()}}
+                            onPaint:{var c=getContext("2d");c.clearRect(0,0,width,height);var live=root.appState.connectionLive||{};var rings=live.areas||[]
+                                c.fillStyle="rgba(53,104,192,0.18)"
+                                for(var p=0;p<rings.length;p++){c.beginPath();for(var r=0;r<rings[p].length;r++){var ring=rings[p][r];for(var n=0;n<ring.length;n++){var v=ring[n];if(n===0)c.moveTo(v.x*viewport.zoom-x,v.y*viewport.zoom-y);else c.lineTo(v.x*viewport.zoom-x,v.y*viewport.zoom-y)}c.closePath()}c.fill()}
+                                var arc=live.valid?live.arc:root.appState.connectionPoints||[];c.strokeStyle=live.snapped?"#158565":"#3568c0";c.lineWidth=root.appState.editStrokeWidth||1.4
+                                c.beginPath();for(var i=0;i<arc.length;i++){var q=arc[i];if(i===0)c.moveTo(q.x*viewport.zoom-x,q.y*viewport.zoom-y);else c.lineTo(q.x*viewport.zoom-x,q.y*viewport.zoom-y)}c.stroke()
+                                if(root.appState.connectionStage>0&&arc.length){var ends=[arc[0],arc[arc.length-1]];for(var j=0;j<ends.length;j++){var pt=ends[j];c.beginPath();c.arc(pt.x*viewport.zoom-x,pt.y*viewport.zoom-y,4,0,2*Math.PI);c.stroke()}}
+                            }
+                        }
                         Canvas {
                             id: editCanvas; objectName: "editCanvas"
                             // Keep the drawing surface bounded to the viewport at every zoom level.
@@ -1554,6 +1584,7 @@ ApplicationWindow {
                                 if (mapMouse.direct) {
                                     ctx.strokeStyle="#e52c7a"; ctx.lineWidth=root.appState.editStrokeWidth||1.4
                                     if (mapMouse.edgeDragging) {
+                                        if(root.workspaceMode&&root.appState.boundaryMode==="connect"&&(root.appState.connectionLive||{}).valid)return
                                         ctx.beginPath()
                                         for (var n=0; n<mapMouse.edgePath.length; n++) {
                                             var node=mapMouse.edgePath[n]
@@ -1563,6 +1594,8 @@ ApplicationWindow {
                                             else ctx.lineTo(ex,ey)
                                         }
                                         ctx.stroke()
+                                    } else if (mapMouse.snap.arc && mapMouse.snap.arc.length) {
+                                        ctx.beginPath();for(var a=0;a<mapMouse.snap.arc.length;a++){var hp=mapMouse.snap.arc[a];if(a===0)ctx.moveTo(hp.x*viewport.zoom-x,hp.y*viewport.zoom-y);else ctx.lineTo(hp.x*viewport.zoom-x,hp.y*viewport.zoom-y)}ctx.stroke()
                                     } else if (mapMouse.snap.x!==undefined) {
                                         ctx.beginPath(); ctx.arc(mapMouse.snap.x*viewport.zoom-x,mapMouse.snap.y*viewport.zoom-y,5,0,2*Math.PI); ctx.stroke()
                                     }
@@ -1627,8 +1660,9 @@ ApplicationWindow {
                             readonly property bool edgeDragging: edgePath.length>0
                             property var snap: ({})
                             hoverEnabled: direct
+                            Timer {id:connectionTimer;interval:60;onTriggered:{if(mapMouse.edgeDragging)backend.previewBoundaryConnection((mapMouse.dragX-mapMouse.pressX)/viewport.zoom,(mapMouse.dragY-mapMouse.pressY)/viewport.zoom,8/viewport.zoom)}}
                             function clearEdge() {
-                                edgePath=[]; snap={}; backend.cancelEdgeDrag(); editCanvas.requestPaint()
+                                connectionTimer.stop();edgePath=[]; snap={}; backend.cancelEdgeDrag(); editCanvas.requestPaint()
                             }
                             onDirectChanged: { if (!direct) clearEdge() }
                             onExited: { snap={}; editCanvas.requestPaint() }
@@ -1650,6 +1684,7 @@ ApplicationWindow {
                                     return
                                 }
                                 if(root.viewing || root.originalOnly){mouse.accepted=false;return}
+                                if(root.workspaceMode&&root.appState.polygonsLocked){mouse.accepted=false;return}
                                 if (lassoMode) {
                                     if (root.appState.busy) return
                                     backend.clearEditLine()
@@ -1658,6 +1693,7 @@ ApplicationWindow {
                                     editCanvas.requestPaint();return
                                 }
                                 if (direct) {
+                                    if(root.workspaceMode&&root.appState.boundaryMode==="span"){backend.connectBoundaryClick(mouse.x/viewport.zoom,mouse.y/viewport.zoom,8/viewport.zoom);return}
                                     pressX=dragX=mouse.x; pressY=dragY=mouse.y
                                     edgePath=backend.beginEdgeDrag(mouse.x/viewport.zoom,mouse.y/viewport.zoom,8/viewport.zoom,singleEdge.checked)
                                     if (!edgeDragging) mouse.accepted=false
@@ -1690,7 +1726,7 @@ ApplicationWindow {
                                     snap=backend.edgeHover(mouse.x/viewport.zoom,mouse.y/viewport.zoom,8/viewport.zoom)
                                     editCanvas.requestPaint()
                                 }
-                                if (edgeDragging || vertexDragging) { dragX=mouse.x; dragY=mouse.y; editCanvas.requestPaint() }
+                                if (edgeDragging || vertexDragging) { dragX=mouse.x; dragY=mouse.y; editCanvas.requestPaint();if(root.workspaceMode&&edgeDragging&&root.appState.boundaryMode==="connect"&&!connectionTimer.running)connectionTimer.start() }
                             }
                             onReleased: function(mouse) {
                                 if(panning&&root.workspaceMode){panning=false;return}

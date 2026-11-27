@@ -16,6 +16,15 @@ import zipfile
 ROOT=Path(__file__).resolve().parents[1]
 
 
+def find_nsis():
+    candidates=[shutil.which('makensis')]
+    if os.environ.get('NSIS_HOME'):candidates.append(str(Path(os.environ['NSIS_HOME'])/'makensis.exe'))
+    candidates.extend(str(Path(os.environ[key])/'NSIS/makensis.exe') for key in ('ProgramFiles(x86)','ProgramFiles') if os.environ.get(key))
+    for path in candidates:
+        if path and Path(path).is_file():return path
+    raise SystemExit('NSIS compiler is missing. Install NSIS or set NSIS_HOME before building the Windows installer.')
+
+
 def run(*args,**kwargs):
     subprocess.run([str(a) for a in args],check=True,**kwargs)
 
@@ -134,6 +143,7 @@ def main():
         raise SystemExit('Install the full PySide6 dependency, including WebEngine, before packaging.')
     version=__version__;number=info['number'];arch=platform.machine().lower().replace('amd64','x64')
     if sys.platform not in ('win32','darwin'):raise SystemExit('Native Windows/macOS build required.')
+    nsis=find_nsis() if sys.platform=='win32' else None
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
     assets=ROOT/'build/branding';branding(assets,version,number);manual(ROOT/'build/manual');notices(ROOT/'build/notices')
     frozen=ROOT/'build/frozen'
@@ -148,7 +158,6 @@ def main():
         mac_installer(app,out/(stem+'.pkg'),assets,version,number)
         run('ditto','-c','-k','--sequesterRsrc','--keepParent',app,out/(stem+'.zip'))
     else:
-        nsis=shutil.which('makensis') or str(Path(os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)'))/'NSIS/makensis.exe')
         payload_kb=math.ceil(sum(p.stat().st_size for p in app.rglob('*') if p.is_file())/1024)
         run(nsis,'/INPUTCHARSET','UTF8',f'/DPAYLOAD_KB={payload_kb}',f'/DVERSION={version}',f'/DBUILD={number}',f'/DOUTPUT={out/(stem+"-Setup.exe")}',f'/DAPPDIR={app}',f'/DASSETS={assets}',ROOT/'packaging/windows.nsi')
         shutil.make_archive(str(out/stem),'zip',root_dir=app.parent,base_dir=app.name)

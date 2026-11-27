@@ -288,6 +288,29 @@ def export_layout(document, result, settings, path, atlas=False):
     return write_layout(document, result, settings, path, atlas=atlas)
 
 
+def connection_live_job(context,generation,result,drag,dx,dy,tolerance,preferred):
+    from .boundary_connect import connect_drag,preview
+    try:
+        plan=connect_drag(context,drag,dx,dy,tolerance,preferred);live=preview(context,plan)
+    except ValueError as exc:live=dict(valid=False,message=str(exc),arc=[],areas=[],objects=[])
+    return generation,result,live
+
+
+def connection_finish_job(context,drag,dx,dy,tolerance,preferred,folder,document):
+    from .boundary_connect import connect_drag,finish
+    output=finish(context,connect_drag(context,drag,dx,dy,tolerance,preferred))
+    preview_overlay(document,output,Path(folder)/'edit-preview.png')
+    return output
+
+
+def connection_span_job(context,drag,tolerance,anchor,folder,document):
+    from .boundary_connect import connect_span,finish,preview
+    plan=connect_span(context,drag,tolerance,anchor)
+    output=finish(context,plan);output.boundary_preview=preview(context,plan)
+    preview_overlay(document,output,Path(folder)/'edit-preview.png')
+    return output
+
+
 class WorkspaceBackend(Backend):
     layoutPrepared = Signal()
     workspacePanelRequested = Signal(str)
@@ -299,6 +322,9 @@ class WorkspaceBackend(Backend):
     groupsMatched = Signal()
 
     def __init__(self, *args, **kwargs):
+        self.connection_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix="geotrace-connection")
+        self.connection_generation=0;self.connection_future=None;self.connection_pending=None
+        self.connection_geo=None;self.connection_first=None;self.connection_span=None;self.connection_target=None
         self.document = Document()
         from threading import Event
         self.update_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='geotrace-update')
@@ -330,7 +356,7 @@ class WorkspaceBackend(Backend):
         self.detail_tiles=DetailTiles(self.detail_pool,Path(self.temp.name)/'detail-tiles')
         self.prepare_on_import = False
         recent = self.settings.value('workspace/recent', [], type=list)
-        self.notify(workspaceEnabled=True, sheets=[], projectClasses=[], activeSheet='', lineTypes=[], lineCount=0,
+        self.notify(boundaryMode='move',connectionLive={},connectionInfo='',connectionStage=0,connectionPoints=[],connectionAnchor='neighbor',workspaceEnabled=True, sheets=[], projectClasses=[], activeSheet='', lineTypes=[], lineCount=0,
                     lineMode=False, lineTool='select', lineVisible=True, lineLocked=False, polygonsLocked=False,
                     linesUrl='', lineDraft=[], lineSelected=[], lineSelection={}, lineSelectionPaths=[], lineFields=[], linePreviewCount=0,
                     paletteInputUrl='', paletteWidth=1, paletteHeight=1, selectionMeasurement='',
@@ -390,6 +416,7 @@ class WorkspaceBackend(Backend):
     @Slot()
     def poll(self):
         if getattr(self,'_closing',False):return
+        self.poll_connection()
         self.poll_updates()
         self.poll_detail()
         if self.workspace_future is None or not self.workspace_future.done():
@@ -795,6 +822,122 @@ class WorkspaceBackend(Backend):
         paths=polygon_paths(result,doc,(x,y,width,height),zoom,selected,self.edge_drag,self.tree if result is self.result else None,self.polygon_cuts)
         self.polygon_view_key=key
         self.notify(polygonPaths=paths)
+
+    def connection_context(self):
+        from .boundary_connect import Context
+        hidden=set(self.data.get('hiddenClassIds',[]))
+        blocked={i for i,f in enumerate(self.result.features) if f['properties']['class_id'] in hidden}
+        if self.connection_geo is None or self.connection_geo.result is not self.result or self.connection_geo.blocked!=blocked:
+            self.connection_geo=Context(self.result,blocked)
+        return self.connection_geo
+
+    @Slot(str)
+    def setBoundaryMode(self,mode):
+        if mode not in ('move','connect','span') or self.data['busy']:return
+        self.clearBoundaryConnection()
+        self.notify(boundaryMode=mode,status='Отметьте начало и конец участка на одной границе.' if mode=='span' else 'Потяните границу. Подходящий сосед подсветится во время движения.' if mode=='connect' else 'Потяните участок общей границы.')
+
+    @Slot()
+    def clearBoundaryConnection(self):
+        self.connection_generation+=1;self.connection_pending=None;self.connection_future=None
+        self.connection_first=None;self.connection_span=None;self.connection_target=None
+        if getattr(self,'geometry_operation','')=='connect':self.invalidate_edit_preview()
+        self.notify(connectionLive={},connectionStage=0,connectionPoints=[],connectionInfo='')
+
+    def reset_editor(self):
+        super().reset_editor()
+        if hasattr(self,'connection_generation'):self.clearBoundaryConnection()
+
+    @Slot(float,float,float,result='QVariantMap')
+    def edgeHover(self,x,y,tolerance):
+        value=super().edgeHover(x,y,tolerance)
+        if value and self.data.get('boundaryMode')=='connect':
+            try:
+                drag=self.direct_index().plan(x,y,tolerance,False,self.tree)
+                if drag is not None:value['arc']=[dict(x=float(x),y=float(y)) for x,y in drag.pixels]
+            except ValueError:pass
+        return value
+
+    @Slot(float,float,float,bool,result='QVariantList')
+    def beginEdgeDrag(self,x,y,tolerance,single):
+        if self.data.get('autoReady') or self.data.get('geometryReady'):
+            self.notify(status='Сначала примените или закройте текущий предпросмотр.');return []
+        self.clearBoundaryConnection();self.connection_tolerance=tolerance
+        points=super().beginEdgeDrag(x,y,tolerance,single)
+        if self.edge_drag is not None and any(i in self.connection_context().blocked for i,j in self.edge_drag.owners):
+            self.cancelEdgeDrag();return []
+        return points
+
+    @Slot()
+    def cancelEdgeDrag(self):
+        super().cancelEdgeDrag()
+        self.connection_generation+=1;self.connection_pending=None;self.connection_future=None
+        if self.data.get('connectionLive'):
+            generation=self.connection_generation
+            QTimer.singleShot(0,lambda:self.notify(connectionLive={}) if generation==self.connection_generation and not getattr(self,'_closing',False) else None)
+
+    @Slot(float,float,float)
+    def previewBoundaryConnection(self,dx,dy,tolerance):
+        if self.data.get('boundaryMode')!='connect' or self.edge_drag is None or self.data['busy']:return
+        self.connection_pending=(self.connection_generation,self.result,self.edge_drag,float(dx),float(dy),float(tolerance))
+        self.poll_connection()
+
+    def poll_connection(self):
+        if self.connection_future is not None and self.connection_future.done():
+            future=self.connection_future;self.connection_future=None
+            try:
+                generation,result,live=future.result()
+                if generation==self.connection_generation and result is self.result and self.edge_drag is not None:
+                    self.connection_target=live.get('target');self.notify(connectionLive=live)
+            except Exception as exc:
+                self.notify(connectionLive=dict(valid=False,message=str(exc),arc=[],areas=[],objects=[]))
+        if self.connection_future is None and self.connection_pending is not None:
+            args=self.connection_pending;self.connection_pending=None
+            self.connection_future=self.connection_pool.submit(connection_live_job,self.connection_context(),*args,self.connection_target)
+
+    @Slot(float,float)
+    def finishEdgeDrag(self,dx,dy):
+        if self.data.get('boundaryMode')!='connect':return super().finishEdgeDrag(dx,dy)
+        drag,self.edge_drag=self.edge_drag,None
+        if drag is None or self.data['busy'] or self.edit_tool!=5:return
+        tolerance=getattr(self,'connection_tolerance',1.)
+        # The last pointer position is always recomputed, even if a live preview
+        # was still queued when the mouse was released.
+        self.geometry_primary_id=None;self.geometry_operation='connect'
+        self.start('drag',connection_finish_job,self.connection_context(),drag,dx,dy,tolerance,self.connection_target,self.temp.name,self.document.clone())
+
+    @Slot(float,float,float)
+    def connectBoundaryClick(self,x,y,tolerance):
+        if self.result is None or self.data['busy'] or self.polygon_locked():return
+        if self.data.get('autoReady') or (self.data.get('geometryReady') and getattr(self,'geometry_operation','')!='connect'):
+            self.notify(status='Сначала примените или закройте текущий предпросмотр.');return
+        from .boundary_connect import span_drag
+        try:
+            if self.connection_first is None or self.data.get('connectionStage')==2:
+                self.clearBoundaryConnection();hit=self.direct_index().hit(x,y,tolerance)
+                if hit is None:raise ValueError('Нажмите на границу полигона.')
+                i,j,p=hit
+                if i in self.connection_context().blocked:raise ValueError('Группа скрыта или заблокирована.')
+                self.connection_first=(i,j,(p.x,p.y));self.connection_tolerance=tolerance
+                self.notify(connectionStage=1,connectionPoints=[dict(x=p.x,y=p.y)],connectionInfo='Теперь отметьте конец участка на той же границе.',error=False)
+                return
+            i,j,start=self.connection_first
+            self.connection_span=span_drag(self.connection_context(),i,j,start,(x,y),tolerance)
+            self.notify(connectionStage=2,connectionPoints=[dict(x=float(p[0]),y=float(p[1])) for p in self.connection_span.pixels])
+            self.previewBoundarySpan(self.data.get('connectionAnchor','neighbor'))
+        except ValueError as exc:self.notify(connectionInfo=str(exc),status=str(exc),error=False)
+
+    @Slot(str)
+    def previewBoundarySpan(self,anchor):
+        if self.connection_span is None or self.data['busy'] or self.polygon_locked():return
+        self.invalidate_edit_preview();self.geometry_operation='connect';self.geometry_primary_id=None
+        self.notify(connectionAnchor=anchor,connectionInfo='Готовлю соединение выбранного участка…')
+        self.start('geometry',connection_span_job,self.connection_context(),self.connection_span,self.connection_tolerance,anchor,self.temp.name,self.document.clone())
+
+    @Slot()
+    def acceptGeometry(self):
+        if not self.polygon_locked():super().acceptGeometry()
+
 
     @Slot(result=bool)
     def beginSmoothing(self):
@@ -1803,6 +1946,7 @@ class WorkspaceBackend(Backend):
             self.detail_future = self.detail_pool.submit(viewport_images, doc, result, bounds, w, h,True)
 
     def close_details(self):
+        self.connection_pool.shutdown(wait=True,cancel_futures=True)
         self.setCompareShortcutEnabled(False)
         self.detail_pool.shutdown(wait=True, cancel_futures=True)
         self.update_cancel.set()

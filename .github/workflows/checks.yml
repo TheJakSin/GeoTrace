@@ -32,7 +32,16 @@ jobs:
       - run: python -m build
       - name: Install Windows installer compiler
         if: runner.os == 'Windows'
-        run: choco install nsis --yes --no-progress
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            choco install nsis --yes --no-progress --limit-output
+            $paths = @("${env:ProgramFiles(x86)}/NSIS/makensis.exe", "$env:ProgramFiles/NSIS/makensis.exe")
+            $compiler = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if ($compiler) { "NSIS_HOME=$(Split-Path $compiler)" >> $env:GITHUB_ENV; exit 0 }
+            if ($attempt -lt 3) { Start-Sleep -Seconds 15 }
+          }
+          throw 'NSIS installation failed after three attempts'
       - name: Build and check native distribution
         run: python tools/build_desktop.py
       - name: Check Windows installer payload
