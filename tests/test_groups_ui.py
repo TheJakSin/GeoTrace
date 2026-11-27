@@ -31,6 +31,12 @@ def test_group_manager_create_assign_delete_undo_and_save(tmp_path):
         click(w,w.findChild(QQuickItem,'newProjectGroup'))
         w.findChild(QObject,'projectGroupName').setProperty('text','Custom unit')
         w.findChild(QObject,'projectGroupColor').setProperty('text','#cc8844')
+        # Background map/status updates during the opening animation must not
+        # replace the new-group draft with the first existing class.
+        b.notify(status='Map detail refreshed');QTest.qWait(250)
+        assert panel.property('creating')
+        assert w.findChild(QObject,'projectGroupName').property('text')=='Custom unit'
+        assert w.findChild(QObject,'projectGroupColor').property('text')=='#cc8844'
         click(w,w.findChild(QQuickItem,'saveProjectGroup'));wait(b)
         assert len(b.document.classes)==5 and b.document.classes[-1]['name']=='Custom unit'
         QMetaObject.invokeMethod(panel,'close');QTest.qWait(80)

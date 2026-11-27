@@ -194,8 +194,8 @@ Item {
         property int seenEpoch:-1
         readonly property var current:(panels.state.projectClasses||[]).find(function(c){return c.id===classManager.selectedId})||({})
         function choose(identity){var rows=panels.state.projectClasses||[];selectedId=rows.some(function(c){return c.id===identity})?identity:((rows[0]||{}).id||0);creating=false;classTitle.text=current.name||"";classFill.text=(current.style||{}).fill||"#80b5d2"}
-        function newGroup(){selectedId=0;creating=true;classTitle.text="";classFill.text="#80b5d2";classTitle.forceActiveFocus()}
-        onOpened:choose(panels.state.groupFocusId||(panels.state.selection||{}).class_id||((panels.state.projectClasses||[])[0]||{}).id||0)
+        function newGroup(){seenEpoch=panels.state.polygonEpoch;selectedId=0;creating=true;classTitle.text="";classFill.text="#80b5d2";classTitle.forceActiveFocus()}
+        onAboutToShow:{seenEpoch=panels.state.polygonEpoch;choose(panels.state.groupFocusId||(panels.state.selection||{}).class_id||((panels.state.projectClasses||[])[0]||{}).id||0)}
         contentItem:ColumnLayout {spacing:8
             RowLayout {Layout.fillWidth:true
                 Label {text:"Группы проекта";font.bold:true;Layout.fillWidth:true}
