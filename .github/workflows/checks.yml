@@ -71,6 +71,8 @@ jobs:
           if (!(Test-Path "$legacy/project.geotrace")) { throw 'Project was removed during migration' }
           if ((Get-ItemPropertyValue -Path 'HKCU:/Software/GeoTrace/GeoTrace' -Name UpgradeSentinel) -ne 'preserve settings') { throw 'Settings were removed' }
           if ((Get-ItemPropertyValue -Path 'HKLM:/Software/GeoTrace' -Name InstallDir) -ne $destination) { throw 'Machine registration is missing' }
+          $uninstall = Get-ItemPropertyValue -Path 'HKLM:/Software/Microsoft/Windows/CurrentVersion/Uninstall/GeoTrace' -Name UninstallString
+          if ($uninstall -ne ('"' + (Join-Path $destination 'Uninstall.exe') + '"')) { throw 'Uninstaller path is not correctly quoted' }
           python tools/smoke_frozen.py "$destination/GeoTrace.exe" --report dist/desktop/installed-Windows.json
           if ($LASTEXITCODE -ne 0) { throw 'Installed application check failed' }
       - name: Check macOS installer payload

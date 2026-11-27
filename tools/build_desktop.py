@@ -159,7 +159,7 @@ def main():
         run('ditto','-c','-k','--sequesterRsrc','--keepParent',app,out/(stem+'.zip'))
     else:
         payload_kb=math.ceil(sum(p.stat().st_size for p in app.rglob('*') if p.is_file())/1024)
-        run(nsis,'/INPUTCHARSET','UTF8',f'/DPAYLOAD_KB={payload_kb}',f'/DVERSION={version}',f'/DBUILD={number}',f'/DOUTPUT={out/(stem+"-Setup.exe")}',f'/DAPPDIR={app}',f'/DASSETS={assets}',ROOT/'packaging/windows.nsi')
+        run(nsis,'/WX','/INPUTCHARSET','UTF8',f'/DPAYLOAD_KB={payload_kb}',f'/DVERSION={version}',f'/DBUILD={number}',f'/DOUTPUT={out/(stem+"-Setup.exe")}',f'/DAPPDIR={app}',f'/DASSETS={assets}',ROOT/'packaging/windows.nsi')
         shutil.make_archive(str(out/stem),'zip',root_dir=app.parent,base_dir=app.name)
     checksums=[]
     for path in sorted(out.iterdir()):

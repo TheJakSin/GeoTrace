@@ -22,6 +22,7 @@ BrandingText "TJS TECH × TJS HORIZON"
 VIProductVersion "${VERSION}.${BUILD}"
 VIAddVersionKey "ProductName" "GeoTrace"
 VIAddVersionKey "CompanyName" "TJS PRIME · TJS MERIDIAN"
+VIAddVersionKey "LegalCopyright" "TJS PRIME · TJS MERIDIAN"
 VIAddVersionKey "FileDescription" "GeoTrace Setup"
 VIAddVersionKey "FileVersion" "${VERSION} build ${BUILD}"
 !define MUI_ICON "${ASSETS}\GeoTrace.ico"
@@ -113,7 +114,7 @@ FunctionEnd
 Function LaunchGeoTrace
   ; Ask the existing desktop shell to launch the application with the user's
   ; ordinary token, rather than inheriting the installer's elevated token.
-  ExecShell "open" "$WINDIR\explorer.exe" '$"$INSTDIR\GeoTrace.exe$"'
+  ExecShell "open" "$WINDIR\explorer.exe" '"$INSTDIR\GeoTrace.exe"'
 FunctionEnd
 
 Section "GeoTrace" MainSection
@@ -208,7 +209,7 @@ Section "GeoTrace" MainSection
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\GeoTrace" "DisplayVersion" "${VERSION} build ${BUILD}"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\GeoTrace" "Publisher" "TJS PRIME · TJS MERIDIAN"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\GeoTrace" "DisplayIcon" "$INSTDIR\GeoTrace.exe"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\GeoTrace" "UninstallString" '$"$INSTDIR\Uninstall.exe$"'
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\GeoTrace" "UninstallString" '"$INSTDIR\Uninstall.exe"'
 SectionEnd
 Section "Uninstall"
   SetRegView 64
